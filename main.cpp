@@ -1,9 +1,13 @@
 #include <iostream>
 #include <vector>
+#include <fstream>
+#include <iterator>
+#include <algorithm>
 #include <unordered_map>
 #include <vulkan/vulkan.hpp>
 
-
+#define VMA_IMPLEMENTATION
+#include "vk_mem_alloc.h"
 #include "termcolor.hpp"
 
 using namespace std;
@@ -11,6 +15,7 @@ using namespace std;
 using buffer_handle = size_t;
 using memory_handle = size_t;
 
+/*
 template<typename T, typename U>
 T pad_up(T offset, U alignment)
 {
@@ -87,7 +92,6 @@ buffer create_buffer(size_t size, size_t alignment, vk::BufferUsageFlags usage, 
 
 struct vk_memory
 {
-
 	vk::DeviceMemory m_handle;
 
 	uint32_t m_flags;
@@ -96,8 +100,21 @@ struct vk_memory
 
 vector<vk_memory> memory;
 
+size_t reserve_memory(size_t size)
+{
+
+
+
+}
+
+int somefunc(VkBuffer* test)
+{
+
+}
+
 void commit_allocs(vk::Device device)
 {
+
 	for(auto& buffer : buffers)
 	{
 		if(!buffer.m_handle)
@@ -114,10 +131,25 @@ void commit_allocs(vk::Device device)
 					static_cast<uint32_t>(indices.size()), indices.data()
 				}
 			);
+
+			size_t offset = reserve_memory(buffer.m_size, );
+
 		}
 	}
 
-}
+	for(auto& memoryObj : memory)
+	{
+		if(!memoryObj.m_handle)
+		{
+
+			uint32_t idx;
+
+			
+
+			memoryObj.m_handle = device.allocateMemory(vk::MemoryAllocateInfo{memoryObj.m_size,idx});
+		}
+	}
+}*/
 
 VkResult vkCreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback)
 {
@@ -130,7 +162,6 @@ void vkDestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackE
 	auto pfn_vkDestroyDebugReportCallbackEXT = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(vkGetInstanceProcAddr(instance,"vkDestroyDebugReportCallbackEXT"));
 	pfn_vkDestroyDebugReportCallbackEXT(instance, callback, pAllocator);
 }
-
 
 ostream& operator<<(ostream& os, vk::DebugReportFlagsEXT flags)
 {
@@ -173,7 +204,7 @@ ostream& operator<<(ostream& os, vk::DebugReportFlagsEXT flags)
 	}
 
 	if(!multiple)
-		os << termcolor::dark << "UNKNOWN";
+		os << termcolor::blue << "UNKNOWN";
 
 	os << termcolor::reset;
 	return os;
@@ -189,7 +220,7 @@ VkBool32 callback_fn(
     const char*                                 pMessage,
     void*                                       pUserData)
 {
-	std::cout << '[' << vk::DebugReportFlagsEXT(objectType) << "]\t" << pMessage << endl;
+	//std::cout << '[' << vk::DebugReportFlagsEXT(objectType) << "] " << pMessage << endl;
 	return false;
 }
 
@@ -219,22 +250,9 @@ int main()
 
 	auto physicalDevice = instance->enumeratePhysicalDevices().front();
 
-	auto extensionList = physicalDevice.enumerateDeviceExtensionProperties();
-	for(auto& extension : extensionList)
-	{
-		cout << extension.extensionName << endl;
-	}
-
-	auto familyProperties = physicalDevice.getQueueFamilyProperties();
-
-	int i = 0;
-	for(auto& family : familyProperties)
-	{
-		cout << i++ << ' ' << family.queueCount << ' ' << vk::to_string(family.queueFlags) << endl;
-	}
-
+	float priorities[2] = {1.0f, 1.0f};
 	vector<vk::DeviceQueueCreateInfo> queues{
-		vk::DeviceQueueCreateInfo{{}, 0, 0, nullptr}
+		vk::DeviceQueueCreateInfo{{}, 0, 2, priorities}
 	};
 
 	vk::PhysicalDeviceFeatures features;
@@ -250,11 +268,122 @@ int main()
 		}
 	);
 
-	buffer buf0 = create_buffer(1024, 256, vk::BufferUsageFlagBits::eVertexBuffer, GRAPHICS | TRANSFER);
+	auto transferQueue = device->getQueue(0, 0), computeQueue = device->getQueue(0, 1);
 
-	commit_allocs(device.get());
 
-	device->destroy(buffers[0].m_handle);
+	vector<vk::DescriptorSetLayoutBinding> bindings{
+		vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
+		vk::DescriptorSetLayoutBinding{1, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}
+	};
+
+	auto descriptorSetLayout = device->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo{{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
+
+	auto pipelineLayout = device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, 1, &descriptorSetLayout.get()});
+
+	vk::UniquePipeline computePipeline;
+
+	{
+
+		vector<char> code;
+
+		ifstream file("build/shader.comp.spirv", ios::in | ios::binary);
+
+		if(!file) throw std::runtime_error("):");
+
+		copy(istreambuf_iterator<char>(file), istreambuf_iterator<char>(), back_inserter(code));
+
+		if(code.empty()) throw std::runtime_error("D:");
+
+		auto module = device->createShaderModuleUnique(vk::ShaderModuleCreateInfo{{}, static_cast<uint32_t>(code.size()), reinterpret_cast<uint32_t*>(code.data())});
+
+		computePipeline = device->createComputePipelineUnique({}, 
+			vk::ComputePipelineCreateInfo{
+				{},
+				vk::PipelineShaderStageCreateInfo{{},vk::ShaderStageFlagBits::eCompute, module.get(), "main"},
+				pipelineLayout.get()
+			}
+		);
+	}
+	VmaAllocatorCreateInfo allocatorInfo = {};
+	allocatorInfo.physicalDevice = physicalDevice;
+	allocatorInfo.device = device.get();
+
+	VmaAllocator allocator;
+	vmaCreateAllocator(&allocatorInfo, &allocator);
+
+	vk::Buffer buffer;
+	VmaAllocation allocation;
+	{
+		vk::BufferCreateInfo bufferInfo = {{}, 2*3*sizeof(float)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc};
+		
+		VmaAllocationCreateInfo allocationInfo = {};
+		allocationInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		
+		VkBuffer bufferhandle;
+		vmaCreateBuffer(allocator, &static_cast<const VkBufferCreateInfo&>(bufferInfo), &allocationInfo, &bufferhandle, &allocation, nullptr);
+
+		buffer = bufferhandle;
+
+	}
+
+	void* data;
+	vmaMapMemory(allocator, allocation, &data);
+
+	float* start = reinterpret_cast<float*>(data);
+	float* end = start+2*3*256;
+	generate(start,end, [](){return rand()/float(RAND_MAX);});
+
+	vmaUnmapMemory(allocator,allocation);
+
+	vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageBuffer,2};
+	auto descriptorPool = device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{{}, 2, 1, &poolSize});
+	auto descriptorSets = device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{descriptorPool.get(), 1, &descriptorSetLayout.get()});
+
+
+	vk::DescriptorBufferInfo bufferInfo{buffer,allocation->GetOffset(), allocation->GetSize()};
+	device->updateDescriptorSets({vk::WriteDescriptorSet{descriptorSets[0],0,0,1,vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfo}},{});
+
+	auto commandPool = device->createCommandPoolUnique(vk::CommandPoolCreateInfo{{}, 0});
+	auto commandBuffers = device->allocateCommandBuffers(vk::CommandBufferAllocateInfo{commandPool.get(), vk::CommandBufferLevel::ePrimary, 1});
+
+	for(auto cb : commandBuffers)
+	{
+		cb.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eSimultaneousUse});
+		cb.pipelineBarrier(
+			vk::PipelineStageFlagBits::eComputeShader,
+			vk::PipelineStageFlagBits::eComputeShader,
+			{}, 
+			{
+				vk::MemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead}
+			},
+			{},
+			{}
+		);
+		cb.bindPipeline(vk::PipelineBindPoint::eCompute,computePipeline.get());
+		cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSets, {});
+		cb.dispatch(1,1,1)	;
+		cb.end();
+	}
+
+	auto fence = device->createFenceUnique(vk::FenceCreateInfo{});
+
+	vector<vk::SubmitInfo> repeats;
+	repeats.resize(16,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
+
+	cout << "Press enter to submit:" << endl;
+	cin.get();
+	computeQueue.submit(repeats,fence.get());
+
+	auto t0 = chrono::high_resolution_clock::now();
+	device->waitForFences({fence.get()}, true, numeric_limits<uint32_t>::max());
+	auto t1 = chrono::high_resolution_clock::now();
+
+	chrono::duration<double,milli> dif = t1 - t0;
+
+	cout << "16 took " << dif.count() << "ms." << endl;
+
+	vmaDestroyBuffer(allocator, buffer, allocation);
+	vmaDestroyAllocator(allocator);
 
 	return 0;
 }
