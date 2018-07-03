@@ -326,14 +326,16 @@ int main()
 
 	}
 
-	void* data;
-	vmaMapMemory(allocator, allocation, &data);
+	{
+		void* data;
+		vmaMapMemory(allocator, allocation, &data);
 
-	float* start = reinterpret_cast<float*>(data);
-	float* end = start+2*3*256;
-	generate(start,end, [](){return rand()/float(RAND_MAX);});
+		float* start = reinterpret_cast<float*>(data);
+		float* end = start+2*3*256;
+		generate(start,end, [](){return rand()/float(RAND_MAX);});
 
-	vmaUnmapMemory(allocator,allocation);
+		vmaUnmapMemory(allocator,allocation);
+	}
 
 	vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageBuffer,2};
 	auto descriptorPool = device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{{}, 2, 1, &poolSize});
@@ -361,14 +363,14 @@ int main()
 		);
 		cb.bindPipeline(vk::PipelineBindPoint::eCompute,computePipeline.get());
 		cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSets, {});
-		cb.dispatch(1,1,1)	;
+		cb.dispatch(1,1,1);
 		cb.end();
 	}
 
 	auto fence = device->createFenceUnique(vk::FenceCreateInfo{});
 
 	vector<vk::SubmitInfo> repeats;
-	repeats.resize(16,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
+	repeats.resize(125,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
 
 	cout << "Press enter to submit:" << endl;
 	cin.get();
@@ -380,7 +382,21 @@ int main()
 
 	chrono::duration<double,milli> dif = t1 - t0;
 
-	cout << "16 took " << dif.count() << "ms." << endl;
+	cout << "125 took " << dif.count() << "ms." << endl;
+
+
+	{
+		void* data;
+		vmaMapMemory(allocator, allocation, &data);
+
+		float* floats = reinterpret_cast<float*>(data);
+		for(int i = 0; i < 256; ++i)
+		{
+			cout << i << ": " <<  floats[i*6+1] << endl;
+		}
+
+		vmaUnmapMemory(allocator,allocation);
+	}
 
 	vmaDestroyBuffer(allocator, buffer, allocation);
 	vmaDestroyAllocator(allocator);
