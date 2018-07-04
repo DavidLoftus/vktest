@@ -23,4 +23,15 @@ void main()
     particles[gl_LocalInvocationIndex].position += particles[gl_LocalInvocationIndex].velocity * TIME_STEP;
     particles[gl_LocalInvocationIndex].velocity.y -= 9.81*TIME_STEP;
     
+    /*vec3 pos = particles[gl_LocalInvocationIndex].position;
+    vec3 acc = vec3(0,0,0);
+    for(uint i = 0; i < 256; ++i)
+    {
+        vec3 diff = 
+        float distSquared = dot(diff,diff);
+
+        acc += kG/distSqr
+
+    }*/
+
 }

@@ -4,7 +4,10 @@
 #include <iterator>
 #include <algorithm>
 #include <unordered_map>
+#include <memory>
 #include <vulkan/vulkan.hpp>
+
+#include <GLFW/glfw3.h>
 
 #define VMA_IMPLEMENTATION
 #include "vk_mem_alloc.h"
@@ -15,7 +18,9 @@ using namespace std;
 using buffer_handle = size_t;
 using memory_handle = size_t;
 
+
 /*
+{
 template<typename T, typename U>
 T pad_up(T offset, U alignment)
 {
@@ -149,6 +154,8 @@ void commit_allocs(vk::Device device)
 			memoryObj.m_handle = device.allocateMemory(vk::MemoryAllocateInfo{memoryObj.m_size,idx});
 		}
 	}
+}
+
 }*/
 
 VkResult vkCreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback)
@@ -224,31 +231,67 @@ VkBool32 callback_fn(
 	return false;
 }
 
-int main()
+vk::UniqueShaderModule createShaderModule(vk::Device device, const std::string& path)
 {
+	vector<char> code;
 
-	cout << "Hello world" << endl;
+	ifstream file("build/shader.comp.spirv", ios::in | ios::binary);
 
+	if(!file) throw std::runtime_error("File " + path + " not found.");
+
+	copy(istreambuf_iterator<char>(file), istreambuf_iterator<char>(), back_inserter(code));
+
+	if(code.empty()) throw std::runtime_error("File " + path + " empty");
+
+	return device.createShaderModuleUnique(vk::ShaderModuleCreateInfo{{}, static_cast<uint32_t>(code.size()), reinterpret_cast<uint32_t*>(code.data())});
+
+}
+
+const int WIDTH = 800, HEIGHT = 600;
+
+auto createWindow()
+{
+	auto window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Test", nullptr, nullptr);
+
+	glfwWindowHint(GLFW_RESIZABLE,false);
+	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+
+	return unique_ptr<GLFWwindow, void(*)(GLFWwindow* ptr)>(window,glfwDestroyWindow);
+}
+
+vector<const char*> layers{"VK_LAYER_LUNARG_standard_validation"}, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME,VK_KHR_SURFACE_EXTENSION_NAME};
+
+auto createInstance()
+{
 	vk::ApplicationInfo appInfo{"vktest", 0, "Pomme", 0, VK_API_VERSION_1_1};
-
-	vector<const char*> layers{"VK_LAYER_LUNARG_standard_validation"}, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
-
-	auto instance = vk::createInstanceUnique(
+	return vk::createInstanceUnique(
 		vk::InstanceCreateInfo{
 			{}, &appInfo,
 			static_cast<uint32_t>(layers.size()),	  layers.data(),
 			static_cast<uint32_t>(extensions.size()), extensions.data()
 		}
 	);
+}
 
-	auto debugReportCallback = instance->createDebugReportCallbackEXTUnique(
+auto createDebugThinger(vk::Instance instance)
+{
+	return instance.createDebugReportCallbackEXTUnique(
 		vk::DebugReportCallbackCreateInfoEXT{
 			vk::DebugReportFlagBitsEXT::eDebug | vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eInformation | vk::DebugReportFlagBitsEXT::ePerformanceWarning | vk::DebugReportFlagBitsEXT::eWarning,
 			callback_fn
 		}
 	);
+}
 
-	auto physicalDevice = instance->enumeratePhysicalDevices().front();
+auto createDevice(vk::Instance instance)
+{
+
+	auto physicalDevice = instance.enumeratePhysicalDevices().front();
+	for(auto extension : physicalDevice.enumerateDeviceExtensionProperties())
+	{
+		cout << "DeviceExtension: " << extension.extensionName << '(' << extension.specVersion << ')' << endl;
+	}
+
 
 	float priorities[2] = {1.0f, 1.0f};
 	vector<vk::DeviceQueueCreateInfo> queues{
@@ -257,7 +300,7 @@ int main()
 
 	vk::PhysicalDeviceFeatures features;
 
-	extensions.erase(extensions.begin());
+	extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 	
 	auto device = physicalDevice.createDeviceUnique(
 		vk::DeviceCreateInfo{{},
@@ -267,6 +310,66 @@ int main()
 			&features
 		}
 	);
+
+	return make_pair(move(device),physicalDevice);
+}
+
+auto createComputePipeline(vk::Device device, vk::PipelineLayout pipelineLayout)
+{
+
+	auto module = createShaderModule(device, "build/shader.comp.spirv");
+	return device.createComputePipelineUnique({}, 
+		vk::ComputePipelineCreateInfo{
+			{},
+			vk::PipelineShaderStageCreateInfo{{},vk::ShaderStageFlagBits::eCompute, module.get(), "main"},
+			pipelineLayout
+		}
+	);
+}
+
+auto createGraphicsPipeline(vk::Device device)
+{
+		auto vertexShader = createShaderModule(device, "build/shader.vert.sprv"), fragmentShader = createShaderModule(device, "build/shader.frag.sprv");
+		
+		vector<vk::PipelineShaderStageCreateInfo> stages{
+			vk::PipelineShaderStageCreateInfo{},
+			vk::PipelineShaderStageCreateInfo{}
+		};
+
+		vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*3,vk::VertexInputRate::eVertex};
+		vk::VertexInputAttributeDescription vertexAttribute{0,0, vk::Format::eR32G32B32Sfloat, 0};
+		vk::PipelineVertexInputStateCreateInfo vertexInput{{}, 1, &vertexBinding, 1, &vertexAttribute};
+		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{{},vk::PrimitiveTopology::ePointList,0};
+		//vk::PipelineTessellationStateCreateInfo tesselation{{}, ?};
+		/*vk::Viewport viewport{0.0f,0.0f, swapchainExtent.width, swapchainExtent.height, 0.0f, 1.0f};
+		vk::Rect2D{{},vk::Extent2D{,}};
+		vk::PipelineViewportStateCreateInfo{{}, 1, &viewport, 1, &scissor};*/
+
+		return device.createGraphicsPipelineUnique({}, 
+			vk::GraphicsPipelineCreateInfo{
+				{},
+				static_cast<uint32_t>(stages.size()),stages.data(),
+				&vertexInput,
+				&inputAssembly,
+				nullptr,
+
+			}
+		);
+	}
+
+int main()
+{
+	for(auto& extension : vk::enumerateInstanceExtensionProperties())
+	{
+		cout << "Extension: " << extension.extensionName << '(' << extension.specVersion << ')' << endl;
+	}
+	auto window = createWindow();
+
+	auto instance = createInstance();
+
+	auto debugReportCallback = createDebugThinger(instance.get());
+
+	auto [device,physicalDevice] = createDevice(instance.get());
 
 	auto transferQueue = device->getQueue(0, 0), computeQueue = device->getQueue(0, 1);
 
@@ -280,30 +383,11 @@ int main()
 
 	auto pipelineLayout = device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, 1, &descriptorSetLayout.get()});
 
-	vk::UniquePipeline computePipeline;
+	vk::UniquePipeline computePipeline = createComputePipeline(device.get(), pipelineLayout.get());
 
-	{
+	vk::UniquePipeline graphicsPipeline = createGraphicsPipeline(device.get());
 
-		vector<char> code;
 
-		ifstream file("build/shader.comp.spirv", ios::in | ios::binary);
-
-		if(!file) throw std::runtime_error("):");
-
-		copy(istreambuf_iterator<char>(file), istreambuf_iterator<char>(), back_inserter(code));
-
-		if(code.empty()) throw std::runtime_error("D:");
-
-		auto module = device->createShaderModuleUnique(vk::ShaderModuleCreateInfo{{}, static_cast<uint32_t>(code.size()), reinterpret_cast<uint32_t*>(code.data())});
-
-		computePipeline = device->createComputePipelineUnique({}, 
-			vk::ComputePipelineCreateInfo{
-				{},
-				vk::PipelineShaderStageCreateInfo{{},vk::ShaderStageFlagBits::eCompute, module.get(), "main"},
-				pipelineLayout.get()
-			}
-		);
-	}
 	VmaAllocatorCreateInfo allocatorInfo = {};
 	allocatorInfo.physicalDevice = physicalDevice;
 	allocatorInfo.device = device.get();
@@ -324,9 +408,6 @@ int main()
 
 		buffer = bufferhandle;
 
-	}
-
-	{
 		void* data;
 		vmaMapMemory(allocator, allocation, &data);
 
@@ -397,7 +478,6 @@ int main()
 
 		vmaUnmapMemory(allocator,allocation);
 	}
-
 	vmaDestroyBuffer(allocator, buffer, allocation);
 	vmaDestroyAllocator(allocator);
 
