@@ -229,7 +229,8 @@ VkBool32 callback_fn(
     const char*                                 pMessage,
     void*                                       pUserData)
 {
-	cout << '[' << vk::DebugReportFlagsEXT(objectType) << "] " << pMessage << endl;
+	cout << '[' << vk::DebugReportFlagsEXT(flags) << "] " << pMessage << endl;
+	
 	return false;
 }
 
@@ -313,6 +314,8 @@ auto createDevice(vk::Instance instance)
 		cout << "DeviceExtension: " << extension.extensionName << '(' << extension.specVersion << ')' << endl;
 	}
 
+	physicalDevice.getQueueFamilyProperties();
+
 
 	float priorities[2] = {1.0f, 1.0f};
 	vector<vk::DeviceQueueCreateInfo> queues{
@@ -335,27 +338,43 @@ auto createDevice(vk::Instance instance)
 	return make_pair(move(device),physicalDevice);
 }
 
+vk::Format swapchainFormat;
+vk::Extent2D swapchainExtent;
+
 auto createSwapchain(vk::Device device, vk::PhysicalDevice physicalDevice, vk::SurfaceKHR surface)
 {
 	auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
 
+	uint32_t result = physicalDevice.getSurfaceSupportKHR(0, surface);
+	cout << "Result: " << result << endl;
 
 	auto formats = physicalDevice.getSurfaceFormatsKHR(surface);
+
+	swapchainFormat = formats[0].format;
+
 	cout << "Printing formats" << endl;
 	for(auto format : formats)
 	{
 		cout << vk::to_string(format.format) << ' ' << vk::to_string(format.colorSpace) << endl;
 	}
 
-	vk::Extent2D swapchainExtent = {
+	swapchainExtent = vk::Extent2D{
 		clamp(WIDTH, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
 		clamp(HEIGHT, capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
 	};
 
+	auto presentModes = physicalDevice.getSurfacePresentModesKHR(surface);
+
+	cout << "Printing present modes:" << endl;
+	for(auto mode : presentModes)
+	{
+		cout << vk::to_string(mode) << endl;
+	}
+
 	return device.createSwapchainKHRUnique(vk::SwapchainCreateInfoKHR{
 		{}, surface,
 		capabilities.minImageCount,
-		vk::Format::eR8G8B8A8Snorm, vk::ColorSpaceKHR::eSrgbNonlinear,
+		swapchainFormat, vk::ColorSpaceKHR::eSrgbNonlinear,
 		swapchainExtent,
 		1,
 		vk::ImageUsageFlagBits::eColorAttachment,
@@ -382,32 +401,130 @@ auto createComputePipeline(vk::Device device, vk::PipelineLayout pipelineLayout)
 	);
 }
 
-auto createGraphicsPipeline(vk::Device device)
+auto createRenderPass(vk::Device device)
+{
+
+	vector<vk::AttachmentDescription> attachments {
+		vk::AttachmentDescription{
+			{},
+			swapchainFormat,
+			vk::SampleCountFlagBits::e1,
+			vk::AttachmentLoadOp::eDontCare,
+			vk::AttachmentStoreOp::eStore,
+			vk::AttachmentLoadOp::eDontCare,
+			vk::AttachmentStoreOp::eDontCare,
+			vk::ImageLayout::eUndefined,
+			vk::ImageLayout::ePresentSrcKHR
+		}
+	};
+
+	vector<vk::AttachmentReference> attachmentReferences {
+		vk::AttachmentReference{0, vk::ImageLayout::eColorAttachmentOptimal}
+	};
+
+	
+
+	vector<vk::SubpassDescription> subpasses {
+		vk::SubpassDescription{
+			{},
+			vk::PipelineBindPoint::eGraphics,
+			0, nullptr,
+			static_cast<uint32_t>(attachmentReferences.size()), attachmentReferences.data()
+		}
+	};
+
+	vector<vk::SubpassDependency> depencies {
+
+	};
+
+	return device.createRenderPassUnique(
+		vk::RenderPassCreateInfo{
+			{},
+			static_cast<uint32_t>(attachments.size()), attachments.data(),
+			static_cast<uint32_t>(subpasses.size()), subpasses.data(),
+			static_cast<uint32_t>(depencies.size()), depencies.data(),
+		}
+	);
+
+}
+
+auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::PipelineLayout pipelineLayout)
 {
 	auto vertexShader = createShaderModule(device, "build/shader.vert.sprv"), fragmentShader = createShaderModule(device, "build/shader.frag.sprv");
-	
+
 	vector<vk::PipelineShaderStageCreateInfo> stages{
-		vk::PipelineShaderStageCreateInfo{},
-		vk::PipelineShaderStageCreateInfo{}
+		vk::PipelineShaderStageCreateInfo{
+			{},
+			vk::ShaderStageFlagBits::eVertex,
+			vertexShader.get(),
+			"main",
+			
+		},
+		vk::PipelineShaderStageCreateInfo{
+			{},
+			vk::ShaderStageFlagBits::eFragment,
+			fragmentShader.get(),
+			"main",
+			
+		},
 	};
 
 	vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*3,vk::VertexInputRate::eVertex};
 	vk::VertexInputAttributeDescription vertexAttribute{0,0, vk::Format::eR32G32B32Sfloat, 0};
 	vk::PipelineVertexInputStateCreateInfo vertexInput{{}, 1, &vertexBinding, 1, &vertexAttribute};
-	vk::PipelineInputAssemblyStateCreateInfo inputAssembly{{},vk::PrimitiveTopology::ePointList,0};
+	vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{{},vk::PrimitiveTopology::ePointList,0};
 	//vk::PipelineTessellationStateCreateInfo tesselation{{}, ?};
-	/*vk::Viewport viewport{0.0f,0.0f, swapchainExtent.width, swapchainExtent.height, 0.0f, 1.0f};
-	vk::Rect2D{{},vk::Extent2D{,}};
-	vk::PipelineViewportStateCreateInfo{{}, 1, &viewport, 1, &scissor};*/
+	vk::Viewport viewport{0.0f,0.0f, static_cast<float>(swapchainExtent.width), static_cast<float>(swapchainExtent.height), 0.0f, 1.0f};
+	vk::Rect2D scissor{{},swapchainExtent};
+	vk::PipelineViewportStateCreateInfo viewportState{{}, 1, &viewport, 1, &scissor};
+
+	vk::PipelineRasterizationStateCreateInfo rasterizationState{
+		{},
+		false,
+		false,
+		vk::PolygonMode::eFill,
+		vk::CullModeFlagBits::eBack, vk::FrontFace::eClockwise,
+		false, 0.0f, 0.0f, 0.0f,
+		1.0f
+	};
+
+	vk::PipelineMultisampleStateCreateInfo multisampleState;
+
+	//vk::PipelineDepthStencilStateCreateInfo depthStencilState;
+
+	vector<vk::PipelineColorBlendAttachmentState> colorBlendAttachments {
+		vk::PipelineColorBlendAttachmentState().setColorWriteMask(
+			vk::ColorComponentFlagBits::eR |
+			vk::ColorComponentFlagBits::eG |
+			vk::ColorComponentFlagBits::eB |
+			vk::ColorComponentFlagBits::eA
+		)
+	};
+
+	vk::PipelineColorBlendStateCreateInfo colorBlendState{
+		{},
+		false,
+		vk::LogicOp::eCopy,
+		static_cast<uint32_t>(colorBlendAttachments.size()), colorBlendAttachments.data(),
+	};
+
+	//vk::PipelineDynamicStateCreateInfo dynamicState;
 
 	return device.createGraphicsPipelineUnique({}, 
 		vk::GraphicsPipelineCreateInfo{
 			{},
 			static_cast<uint32_t>(stages.size()),stages.data(),
 			&vertexInput,
-			&inputAssembly,
+			&inputAssemblyState,
 			nullptr,
-
+			&viewportState,
+			&rasterizationState,
+			&multisampleState,
+			nullptr,
+			&colorBlendState,
+			nullptr,
+			pipelineLayout,
+			renderPass, 0
 		}
 	);
 }
@@ -439,6 +556,7 @@ auto createCommandBuffers(vk::Device device, vk::Pipeline graphicsPipeline, vk::
 	return make_pair(move(commandPool),move(commandBuffers));
 }
 
+
 int main()
 {
 	for(auto& extension : vk::enumerateInstanceExtensionProperties())
@@ -456,6 +574,28 @@ int main()
 
 	auto swapchain = createSwapchain(device.get(), physicalDevice, surface.get());
 
+	auto swapchainImages = device->getSwapchainImagesKHR(swapchain.get());
+	
+	vector<vk::UniqueImageView> swapchainImageViews;
+	swapchainImageViews.reserve(swapchainImages.size());
+	transform(
+		begin(swapchainImages),
+		end(swapchainImages),
+		back_inserter(swapchainImageViews),
+		[device=device.get()](auto image){
+			return device.createImageViewUnique(
+				vk::ImageViewCreateInfo{
+					{},
+					image,
+					vk::ImageViewType::e2D,
+					swapchainFormat,
+					{},
+					vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+				}
+			);
+		}
+	);
+
 	vector<vk::DescriptorSetLayoutBinding> bindings{
 		vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
 		vk::DescriptorSetLayoutBinding{1, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}
@@ -463,11 +603,12 @@ int main()
 
 	auto descriptorSetLayout = device->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo{{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
 
-	auto pipelineLayout = device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, 1, &descriptorSetLayout.get()});
+	auto computePipelineLayout = device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, 1, &descriptorSetLayout.get()});
+	auto computePipeline = createComputePipeline(device.get(), computePipelineLayout.get());
 
-	vk::UniquePipeline computePipeline = createComputePipeline(device.get(), pipelineLayout.get());
-
-	//vk::UniquePipeline graphicsPipeline = createGraphicsPipeline(device.get());
+	auto renderPass = createRenderPass(device.get());
+	auto graphicsPipelineLayout = device->createPipelineLayoutUnique({});;
+	auto graphicsPipeline = createGraphicsPipeline(device.get(), renderPass.get(), graphicsPipelineLayout.get());
 
 
 	VmaAllocatorCreateInfo allocatorInfo = {};
@@ -512,6 +653,7 @@ int main()
 
 
 	auto [commandPool, commandBuffers] = createCommandBuffers(device.get(),nullptr, computePipeline.get(), pipelineLayout.get(), descriptorSets);
+
 
 	vector<vk::SubmitInfo> repeats;
 	repeats.resize(125,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
