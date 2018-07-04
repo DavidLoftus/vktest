@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <unordered_map>
 #include <memory>
-#include <vulkan/vulkan.hpp>
 
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+
+#include <vulkan/vulkan.hpp>
 
 #define VMA_IMPLEMENTATION
 #include "vk_mem_alloc.h"
@@ -227,7 +229,7 @@ VkBool32 callback_fn(
     const char*                                 pMessage,
     void*                                       pUserData)
 {
-	//std::cout << '[' << vk::DebugReportFlagsEXT(objectType) << "] " << pMessage << endl;
+	cout << '[' << vk::DebugReportFlagsEXT(objectType) << "] " << pMessage << endl;
 	return false;
 }
 
@@ -247,30 +249,49 @@ vk::UniqueShaderModule createShaderModule(vk::Device device, const std::string& 
 
 }
 
-const int WIDTH = 800, HEIGHT = 600;
+const uint32_t WIDTH = 800, HEIGHT = 600;
 
 auto createWindow()
 {
-	auto window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Test", nullptr, nullptr);
+	glfwInit();
 
 	glfwWindowHint(GLFW_RESIZABLE,false);
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
+	auto window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Test", nullptr, nullptr);
+
 	return unique_ptr<GLFWwindow, void(*)(GLFWwindow* ptr)>(window,glfwDestroyWindow);
 }
 
-vector<const char*> layers{"VK_LAYER_LUNARG_standard_validation"}, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME,VK_KHR_SURFACE_EXTENSION_NAME};
+vector<const char*> layers{"VK_LAYER_LUNARG_standard_validation"}, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
 
 auto createInstance()
-{
+{	
+	uint32_t count;
+	const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&count);
+
+	vector<const char*> extensions_copy = extensions;
+	extensions_copy.insert(extensions_copy.end(), glfwExtensions, &glfwExtensions[count]);
+
+	for(auto extension : extensions_copy) cout << "InstanceExtension " << extension << endl;
+
 	vk::ApplicationInfo appInfo{"vktest", 0, "Pomme", 0, VK_API_VERSION_1_1};
 	return vk::createInstanceUnique(
 		vk::InstanceCreateInfo{
 			{}, &appInfo,
 			static_cast<uint32_t>(layers.size()),	  layers.data(),
-			static_cast<uint32_t>(extensions.size()), extensions.data()
+			static_cast<uint32_t>(extensions_copy.size()), extensions_copy.data()
 		}
 	);
+}
+
+auto createSurface(vk::Instance instance, GLFWwindow* window)
+{
+	vk::SurfaceKHR surface;
+	auto result = static_cast<vk::Result>(glfwCreateWindowSurface(instance,window,nullptr, reinterpret_cast<VkSurfaceKHR*>(&surface)));
+
+	vk::ObjectDestroy<vk::Instance> deleter(instance);
+	return vk::createResultValue(result, surface, "createSurface", deleter);
 }
 
 auto createDebugThinger(vk::Instance instance)
@@ -314,6 +335,40 @@ auto createDevice(vk::Instance instance)
 	return make_pair(move(device),physicalDevice);
 }
 
+auto createSwapchain(vk::Device device, vk::PhysicalDevice physicalDevice, vk::SurfaceKHR surface)
+{
+	auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
+
+
+	auto formats = physicalDevice.getSurfaceFormatsKHR(surface);
+	cout << "Printing formats" << endl;
+	for(auto format : formats)
+	{
+		cout << vk::to_string(format.format) << ' ' << vk::to_string(format.colorSpace) << endl;
+	}
+
+	vk::Extent2D swapchainExtent = {
+		clamp(WIDTH, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		clamp(HEIGHT, capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
+	};
+
+	return device.createSwapchainKHRUnique(vk::SwapchainCreateInfoKHR{
+		{}, surface,
+		capabilities.minImageCount,
+		vk::Format::eR8G8B8A8Snorm, vk::ColorSpaceKHR::eSrgbNonlinear,
+		swapchainExtent,
+		1,
+		vk::ImageUsageFlagBits::eColorAttachment,
+		vk::SharingMode::eExclusive,
+		0, nullptr,
+		vk::SurfaceTransformFlagBitsKHR::eIdentity,
+		vk::CompositeAlphaFlagBitsKHR::eOpaque,
+		vk::PresentModeKHR::eImmediate,
+		true
+	});
+
+}
+
 auto createComputePipeline(vk::Device device, vk::PipelineLayout pipelineLayout)
 {
 
@@ -329,33 +384,60 @@ auto createComputePipeline(vk::Device device, vk::PipelineLayout pipelineLayout)
 
 auto createGraphicsPipeline(vk::Device device)
 {
-		auto vertexShader = createShaderModule(device, "build/shader.vert.sprv"), fragmentShader = createShaderModule(device, "build/shader.frag.sprv");
-		
-		vector<vk::PipelineShaderStageCreateInfo> stages{
-			vk::PipelineShaderStageCreateInfo{},
-			vk::PipelineShaderStageCreateInfo{}
-		};
+	auto vertexShader = createShaderModule(device, "build/shader.vert.sprv"), fragmentShader = createShaderModule(device, "build/shader.frag.sprv");
+	
+	vector<vk::PipelineShaderStageCreateInfo> stages{
+		vk::PipelineShaderStageCreateInfo{},
+		vk::PipelineShaderStageCreateInfo{}
+	};
 
-		vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*3,vk::VertexInputRate::eVertex};
-		vk::VertexInputAttributeDescription vertexAttribute{0,0, vk::Format::eR32G32B32Sfloat, 0};
-		vk::PipelineVertexInputStateCreateInfo vertexInput{{}, 1, &vertexBinding, 1, &vertexAttribute};
-		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{{},vk::PrimitiveTopology::ePointList,0};
-		//vk::PipelineTessellationStateCreateInfo tesselation{{}, ?};
-		/*vk::Viewport viewport{0.0f,0.0f, swapchainExtent.width, swapchainExtent.height, 0.0f, 1.0f};
-		vk::Rect2D{{},vk::Extent2D{,}};
-		vk::PipelineViewportStateCreateInfo{{}, 1, &viewport, 1, &scissor};*/
+	vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*3,vk::VertexInputRate::eVertex};
+	vk::VertexInputAttributeDescription vertexAttribute{0,0, vk::Format::eR32G32B32Sfloat, 0};
+	vk::PipelineVertexInputStateCreateInfo vertexInput{{}, 1, &vertexBinding, 1, &vertexAttribute};
+	vk::PipelineInputAssemblyStateCreateInfo inputAssembly{{},vk::PrimitiveTopology::ePointList,0};
+	//vk::PipelineTessellationStateCreateInfo tesselation{{}, ?};
+	/*vk::Viewport viewport{0.0f,0.0f, swapchainExtent.width, swapchainExtent.height, 0.0f, 1.0f};
+	vk::Rect2D{{},vk::Extent2D{,}};
+	vk::PipelineViewportStateCreateInfo{{}, 1, &viewport, 1, &scissor};*/
 
-		return device.createGraphicsPipelineUnique({}, 
-			vk::GraphicsPipelineCreateInfo{
-				{},
-				static_cast<uint32_t>(stages.size()),stages.data(),
-				&vertexInput,
-				&inputAssembly,
-				nullptr,
+	return device.createGraphicsPipelineUnique({}, 
+		vk::GraphicsPipelineCreateInfo{
+			{},
+			static_cast<uint32_t>(stages.size()),stages.data(),
+			&vertexInput,
+			&inputAssembly,
+			nullptr,
 
-			}
+		}
+	);
+}
+
+auto createCommandBuffers(vk::Device device, vk::Pipeline graphicsPipeline, vk::Pipeline computePipeline, vk::PipelineLayout computeLayout, const vector<vk::DescriptorSet>& descriptorSets)
+{
+	auto commandPool = device.createCommandPoolUnique(vk::CommandPoolCreateInfo{{}, 0});
+	auto commandBuffers = device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{commandPool.get(), vk::CommandBufferLevel::ePrimary, 1});
+
+	for(auto cb : commandBuffers)
+	{
+		cb.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eSimultaneousUse});
+		cb.pipelineBarrier(
+			vk::PipelineStageFlagBits::eComputeShader,
+			vk::PipelineStageFlagBits::eComputeShader,
+			{}, 
+			{
+				vk::MemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead}
+			},
+			{},
+			{}
 		);
+		cb.bindPipeline(vk::PipelineBindPoint::eCompute,computePipeline);
+		cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computeLayout, 0, descriptorSets, {});
+		cb.dispatch(1,1,1);
+		cb.end();
 	}
+
+	return make_pair(move(commandPool),move(commandBuffers));
+}
 
 int main()
 {
@@ -364,15 +446,15 @@ int main()
 		cout << "Extension: " << extension.extensionName << '(' << extension.specVersion << ')' << endl;
 	}
 	auto window = createWindow();
-
 	auto instance = createInstance();
+	auto surface = createSurface(instance.get(), window.get());
 
 	auto debugReportCallback = createDebugThinger(instance.get());
 
 	auto [device,physicalDevice] = createDevice(instance.get());
-
 	auto transferQueue = device->getQueue(0, 0), computeQueue = device->getQueue(0, 1);
 
+	auto swapchain = createSwapchain(device.get(), physicalDevice, surface.get());
 
 	vector<vk::DescriptorSetLayoutBinding> bindings{
 		vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
@@ -385,7 +467,7 @@ int main()
 
 	vk::UniquePipeline computePipeline = createComputePipeline(device.get(), pipelineLayout.get());
 
-	vk::UniquePipeline graphicsPipeline = createGraphicsPipeline(device.get());
+	//vk::UniquePipeline graphicsPipeline = createGraphicsPipeline(device.get());
 
 
 	VmaAllocatorCreateInfo allocatorInfo = {};
@@ -426,29 +508,10 @@ int main()
 	vk::DescriptorBufferInfo bufferInfo{buffer,allocation->GetOffset(), allocation->GetSize()};
 	device->updateDescriptorSets({vk::WriteDescriptorSet{descriptorSets[0],0,0,1,vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfo}},{});
 
-	auto commandPool = device->createCommandPoolUnique(vk::CommandPoolCreateInfo{{}, 0});
-	auto commandBuffers = device->allocateCommandBuffers(vk::CommandBufferAllocateInfo{commandPool.get(), vk::CommandBufferLevel::ePrimary, 1});
-
-	for(auto cb : commandBuffers)
-	{
-		cb.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eSimultaneousUse});
-		cb.pipelineBarrier(
-			vk::PipelineStageFlagBits::eComputeShader,
-			vk::PipelineStageFlagBits::eComputeShader,
-			{}, 
-			{
-				vk::MemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead}
-			},
-			{},
-			{}
-		);
-		cb.bindPipeline(vk::PipelineBindPoint::eCompute,computePipeline.get());
-		cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSets, {});
-		cb.dispatch(1,1,1);
-		cb.end();
-	}
-
 	auto fence = device->createFenceUnique(vk::FenceCreateInfo{});
+
+
+	auto [commandPool, commandBuffers] = createCommandBuffers(device.get(),nullptr, computePipeline.get(), pipelineLayout.get(), descriptorSets);
 
 	vector<vk::SubmitInfo> repeats;
 	repeats.resize(125,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
@@ -466,7 +529,7 @@ int main()
 	cout << "125 took " << dif.count() << "ms." << endl;
 
 
-	{
+	/*{
 		void* data;
 		vmaMapMemory(allocator, allocation, &data);
 
@@ -477,7 +540,12 @@ int main()
 		}
 
 		vmaUnmapMemory(allocator,allocation);
-	}
+	}*/
+
+	while (!glfwWindowShouldClose(window.get())) {
+        glfwPollEvents();
+    }
+
 	vmaDestroyBuffer(allocator, buffer, allocation);
 	vmaDestroyAllocator(allocator);
 
