@@ -238,7 +238,7 @@ vk::UniqueShaderModule createShaderModule(vk::Device device, const std::string& 
 {
 	vector<char> code;
 
-	ifstream file("build/shader.comp.spirv", ios::in | ios::binary);
+	ifstream file(path, ios::in | ios::binary);
 
 	if(!file) throw std::runtime_error("File " + path + " not found.");
 
@@ -450,7 +450,7 @@ auto createRenderPass(vk::Device device)
 
 auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::PipelineLayout pipelineLayout)
 {
-	auto vertexShader = createShaderModule(device, "build/shader.vert.sprv"), fragmentShader = createShaderModule(device, "build/shader.frag.sprv");
+	auto vertexShader = createShaderModule(device, "build/shader.vert.spirv"), fragmentShader = createShaderModule(device, "build/shader.frag.spirv");
 
 	vector<vk::PipelineShaderStageCreateInfo> stages{
 		vk::PipelineShaderStageCreateInfo{
@@ -469,7 +469,7 @@ auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::Pi
 		},
 	};
 
-	vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*3,vk::VertexInputRate::eVertex};
+	vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*6,vk::VertexInputRate::eVertex};
 	vk::VertexInputAttributeDescription vertexAttribute{0,0, vk::Format::eR32G32B32Sfloat, 0};
 	vk::PipelineVertexInputStateCreateInfo vertexInput{{}, 1, &vertexBinding, 1, &vertexAttribute};
 	vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{{},vk::PrimitiveTopology::ePointList,0};
@@ -529,27 +529,18 @@ auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::Pi
 	);
 }
 
-auto createCommandBuffers(vk::Device device, vk::Pipeline graphicsPipeline, vk::Pipeline computePipeline, vk::PipelineLayout computeLayout, const vector<vk::DescriptorSet>& descriptorSets)
+template<typename Func>
+auto createCommandBuffers(vk::Device device, size_t size, Func func)
 {
 	auto commandPool = device.createCommandPoolUnique(vk::CommandPoolCreateInfo{{}, 0});
-	auto commandBuffers = device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{commandPool.get(), vk::CommandBufferLevel::ePrimary, 1});
+	auto commandBuffers = device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{commandPool.get(), vk::CommandBufferLevel::ePrimary, static_cast<uint32_t>(size)});
 
-	for(auto cb : commandBuffers)
+	for(size_t i = 0; i < commandBuffers.size(); ++i)
 	{
+		auto cb = commandBuffers[i];
+
 		cb.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eSimultaneousUse});
-		cb.pipelineBarrier(
-			vk::PipelineStageFlagBits::eComputeShader,
-			vk::PipelineStageFlagBits::eComputeShader,
-			{}, 
-			{
-				vk::MemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead}
-			},
-			{},
-			{}
-		);
-		cb.bindPipeline(vk::PipelineBindPoint::eCompute,computePipeline);
-		cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computeLayout, 0, descriptorSets, {});
-		cb.dispatch(1,1,1);
+		func(cb, i);
 		cb.end();
 	}
 
@@ -611,6 +602,27 @@ int main()
 	auto graphicsPipeline = createGraphicsPipeline(device.get(), renderPass.get(), graphicsPipelineLayout.get());
 
 
+	vector<vk::UniqueFramebuffer> framebuffers;
+	framebuffers.reserve(swapchainImageViews.size());
+	transform(
+		begin(swapchainImageViews),
+		end(swapchainImageViews),
+		back_inserter(framebuffers),
+		[device=device.get(),renderPass=renderPass.get()](const auto& imageView)
+		{
+			return device.createFramebufferUnique(
+				vk::FramebufferCreateInfo{
+					{},
+					renderPass,
+					1, &imageView.get(),
+					swapchainExtent.width, swapchainExtent.height,
+					1
+				}
+			);
+		}
+	);
+
+
 	VmaAllocatorCreateInfo allocatorInfo = {};
 	allocatorInfo.physicalDevice = physicalDevice;
 	allocatorInfo.device = device.get();
@@ -621,7 +633,7 @@ int main()
 	vk::Buffer buffer;
 	VmaAllocation allocation;
 	{
-		vk::BufferCreateInfo bufferInfo = {{}, 2*3*sizeof(float)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc};
+		vk::BufferCreateInfo bufferInfo = {{}, 2*3*sizeof(float)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eVertexBuffer};
 		
 		VmaAllocationCreateInfo allocationInfo = {};
 		allocationInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
@@ -652,10 +664,34 @@ int main()
 	auto fence = device->createFenceUnique(vk::FenceCreateInfo{});
 
 
-	auto [commandPool, commandBuffers] = createCommandBuffers(device.get(),nullptr, computePipeline.get(), pipelineLayout.get(), descriptorSets);
+	auto [commandPool, commandBuffers] = createCommandBuffers(
+		device.get(), framebuffers.size(),
+		[renderPass=renderPass.get(),&framebuffers,graphicsPipeline=graphicsPipeline.get(), buffer](vk::CommandBuffer cb, size_t i)
+		{
+
+			vector<vk::ClearValue> clearValues {
+				vk::ClearColorValue().setFloat32({1.0f, 0.0f, 0.0f, 1.0f})
+			};
+
+			cb.beginRenderPass(vk::RenderPassBeginInfo{
+				renderPass,
+				framebuffers[i].get(),
+				vk::Rect2D{{}, swapchainExtent},
+				static_cast<uint32_t>(clearValues.size()), clearValues.data()
+			}, vk::SubpassContents::eInline);
+
+			cb.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
+
+			cb.bindVertexBuffers(0, {buffer}, {0});
+
+			cb.draw(256, 1, 0, 0);
+
+			cb.endRenderPass();
+		}
+	);
 
 
-	vector<vk::SubmitInfo> repeats;
+	/*vector<vk::SubmitInfo> repeats;
 	repeats.resize(125,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
 
 	cout << "Press enter to submit:" << endl;
@@ -668,24 +704,34 @@ int main()
 
 	chrono::duration<double,milli> dif = t1 - t0;
 
-	cout << "125 took " << dif.count() << "ms." << endl;
+		cout << "125 took " << dif.count() << "ms." << endl;*/
 
+		auto imageAvailableSemaphore = device->createSemaphoreUnique({}), imageReadySemaphore = device->createSemaphoreUnique({});
 
-	/*{
-		void* data;
-		vmaMapMemory(allocator, allocation, &data);
+		while (!glfwWindowShouldClose(window.get())) {
+			glfwPollEvents();
 
-		float* floats = reinterpret_cast<float*>(data);
-		for(int i = 0; i < 256; ++i)
-		{
-			cout << i << ": " <<  floats[i*6+1] << endl;
-		}
+			auto result = device->acquireNextImageKHR(swapchain.get() ,numeric_limits<uint64_t>::max(),imageAvailableSemaphore.get(), nullptr);
+			uint32_t idx = result.value;
 
-		vmaUnmapMemory(allocator,allocation);
-	}*/
+			cout << idx << ':' << commandBuffers.size() << endl;
 
-	while (!glfwWindowShouldClose(window.get())) {
-        glfwPollEvents();
+			vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+			computeQueue.submit({
+				vk::SubmitInfo{
+					1, &imageAvailableSemaphore.get(), &waitStage,
+					1, &commandBuffers[idx],
+					1, &imageReadySemaphore.get()
+				}
+			}, nullptr);
+
+			computeQueue.presentKHR(vk::PresentInfoKHR{
+				1, &imageReadySemaphore.get(),
+				1, &swapchain.get(),
+				&idx,
+				nullptr
+			});
+
     }
 
 	vmaDestroyBuffer(allocator, buffer, allocation);
