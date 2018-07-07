@@ -19,151 +19,12 @@
 //#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define RENDERDOC
 
 using namespace std;
 
 using buffer_handle = size_t;
 using memory_handle = size_t;
-
-
-/*
-{
-template<typename T, typename U>
-T pad_up(T offset, U alignment)
-{
-	if(alignment == 0 || (offset & (alignment-1)) == 0)
-		return offset;
-	
-	return (offset & !(alignment-1)) + alignment;
-}
-
-enum QueueFlags
-{
-	GRAPHICS,
-	PRESENT,
-	TRANSFER,
-};
-
-class buffer
-{
-private:
-	buffer_handle m_handle;
-	size_t m_offset;
-	size_t m_size;
-	bool m_initialized;
-
-	buffer(buffer_handle handle, size_t offset, size_t size) :
-		m_handle(handle),
-		m_offset(offset),
-		m_size(size)
-	{
-	}
-
-	friend buffer create_buffer(size_t size, size_t alignment, vk::BufferUsageFlags usage, uint32_t queueFlags);
-};
-
-struct vk_buffer
-{
-	vk_buffer(vk::BufferUsageFlags usageFlags, uint32_t queueFlags) :
-		m_usageFlags(usageFlags),
-		m_queueFlags(queueFlags),
-		m_size(0)
-	{
-	}
-
-	vk::BufferUsageFlags m_usageFlags;
-	uint32_t m_queueFlags;
-
-	vk::Buffer m_handle;
-
-	memory_handle m_memory;
-	vk::DeviceSize m_offset;
-	vk::DeviceSize m_size;
-};
-
-vector<vk_buffer> buffers;
-
-buffer create_buffer(size_t size, size_t alignment, vk::BufferUsageFlags usage, uint32_t queueFlags)
-{
-
-	auto it = std::find_if(buffers.begin(), buffers.end(), [usage,queueFlags](const vk_buffer& buffer){
-		return !buffer.m_handle && buffer.m_usageFlags & usage && buffer.m_queueFlags & queueFlags; // Check pending buffers for ability to contain new buffer
-	});
-
-	if(it == buffers.end())
-	{
-		buffers.emplace_back(usage,queueFlags);
-		it = prev(buffers.end());
-	}
-
-	size_t offset = pad_up(it->m_size, alignment);
-	it->m_size = offset+size;
-
-	return buffer(distance(buffers.begin(),it), offset, size);
-}
-
-struct vk_memory
-{
-	vk::DeviceMemory m_handle;
-
-	uint32_t m_flags;
-	size_t m_size;
-};
-
-vector<vk_memory> memory;
-
-size_t reserve_memory(size_t size)
-{
-
-
-
-}
-
-int somefunc(VkBuffer* test)
-{
-
-}
-
-void commit_allocs(vk::Device device)
-{
-
-	for(auto& buffer : buffers)
-	{
-		if(!buffer.m_handle)
-		{
-
-			vk::SharingMode sharingMode = vk::SharingMode::eExclusive;
-			vector<uint32_t> indices; // Empty for now because mac has only 1 queue family
-
-			buffer.m_handle = device.createBuffer(
-				vk::BufferCreateInfo{{},
-					buffer.m_size,
-					buffer.m_usageFlags,
-					sharingMode,
-					static_cast<uint32_t>(indices.size()), indices.data()
-				}
-			);
-
-			size_t offset = reserve_memory(buffer.m_size, );
-
-		}
-	}
-
-	for(auto& memoryObj : memory)
-	{
-		if(!memoryObj.m_handle)
-		{
-
-			uint32_t idx;
-
-			
-
-			memoryObj.m_handle = device.allocateMemory(vk::MemoryAllocateInfo{memoryObj.m_size,idx});
-		}
-	}
-}
-
-}*/
 
 VkResult vkCreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback)
 {
@@ -269,10 +130,21 @@ auto createWindow()
 	return unique_ptr<GLFWwindow, void(*)(GLFWwindow* ptr)>(window,glfwDestroyWindow);
 }
 
-vector<const char*> layers{"VK_LAYER_LUNARG_standard_validation"}, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
+vector<const char*> layers{
+	"VK_LAYER_LUNARG_standard_validation",
+#ifdef RENDERDOC
+	"VK_LAYER_RENDERDOC_Capture"
+#endif
+}, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
 
 auto createInstance()
 {	
+
+	for (auto& layer : vk::enumerateInstanceLayerProperties())
+	{
+		cout << layer.layerName << ": " << layer.description << endl;
+	}
+
 	uint32_t count;
 	const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&count);
 
@@ -314,20 +186,28 @@ auto createDebugThinger(vk::Instance instance)
 template<typename Func>
 auto findQueue(std::vector<vk::QueueFamilyProperties>& queuePropertiesList, Func func)
 {
+#ifdef RENDERDOC
+	return make_pair(0, 0);
+#else
 	uint32_t i = static_cast<uint32_t>(queuePropertiesList.size());
 	auto it = find_if(
 		queuePropertiesList.rbegin(),
 		queuePropertiesList.rend(),
 		[&func, &i](const vk::QueueFamilyProperties properties)
-		{
-			--i;
-			return properties.queueCount > 0 && func(i,properties);
-		}
+	{
+		--i;
+		return properties.queueCount > 0 && func(i, properties);
+	}
 	);
 
-	assert(it != queuePropertiesList.rend());
+	if (it == queuePropertiesList.rend())
+	{
+		cerr << queuePropertiesList.size() << endl;
+		throw runtime_error("No appropriate queue.");
+	}
 
 	return make_pair(i, it->queueCount--);
+#endif
 }
 
 template<typename ... Types>
@@ -336,10 +216,10 @@ auto findQueues(std::vector<vk::QueueFamilyProperties>& queuePropertiesList, Typ
 	return make_tuple(
 		findQueue(
 			queuePropertiesList,
-			[args](uint32_t i, const vk::QueueFamilyProperties& properties) 
-			{
-				return (properties.queueFlags & args) == args;
-			}
+			[args](uint32_t i, const vk::QueueFamilyProperties& properties)
+	{
+		return (properties.queueFlags & args) == args;
+	}
 		)...
 	);
 }
@@ -364,21 +244,25 @@ auto createDevice(vk::Instance instance, vk::SurfaceKHR surface)
 
 	auto queuePropertiesList = physicalDevice.getQueueFamilyProperties();
 
+	for (auto& prop : queuePropertiesList)
+		cout << vk::to_string(prop.queueFlags) << ": " << prop.queueCount << endl;
+
 	tie(pipelineQueueFamily,
 		transferQueueFamily) = findQueues(queuePropertiesList,
-		vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute,
-		vk::QueueFlagBits::eTransfer
+		vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute, vk::QueueFlagBits::eTransfer
 	);
 
 	presentQueueFamily = findQueue(queuePropertiesList, [physicalDevice, surface](uint32_t i, const vk::QueueFamilyProperties&) {return physicalDevice.getSurfaceSupportKHR(i, surface); });
 
 	std::unordered_map<uint32_t, uint32_t> queueCounts;
-	pipelineQueueFamily.second = queueCounts[pipelineQueueFamily.first]++;
-	transferQueueFamily.second = queueCounts[transferQueueFamily.first]++;
-	presentQueueFamily.second = queueCounts[presentQueueFamily.first]++;
+	queueCounts[pipelineQueueFamily.first]++;
+	queueCounts[transferQueueFamily.first]++;
+	queueCounts[presentQueueFamily.first]++;
 
-	float priorities[] = { 1.0f, 1.0f, 1.0f, 1.0f }; // Ensure this is has as many numbers as queues.
-
+	float priorities[] = { 1.0f, 1.0f, 1.0f }; // Ensure this is has as many numbers as queues.
+#ifdef RENDERDOC
+	vector<vk::DeviceQueueCreateInfo> queues{ vk::DeviceQueueCreateInfo{ {}, 0, 1, priorities } };
+#else
 	vector<vk::DeviceQueueCreateInfo> queues;
 	transform(
 		queueCounts.begin(),
@@ -389,7 +273,7 @@ auto createDevice(vk::Instance instance, vk::SurfaceKHR surface)
 			return vk::DeviceQueueCreateInfo{ vk::DeviceQueueCreateFlags{}, p.first, p.second, priorities};
 		}
 	);
-
+#endif
 
 	vk::PhysicalDeviceFeatures features;
 	features.largePoints = true;
@@ -717,7 +601,7 @@ int vkmain()
 	vk::Buffer buffer;
 	VmaAllocation allocation;
 	{
-		vk::BufferCreateInfo bufferInfo = {{}, sizeof(Vertex)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer};
+		vk::BufferCreateInfo bufferInfo = {{}, sizeof(Vertex)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eVertexBuffer};
 		
 		VmaAllocationCreateInfo allocationInfo = {};
 		allocationInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -837,18 +721,22 @@ int vkmain()
 		);
 
 		transferQueue.waitIdle();
+
+		vmaDestroyBuffer(allocator, stagingBuffer, stagingAllocation);
 	}
 
 	auto imageAvailableSemaphore = device->createSemaphoreUnique({}), imageReadySemaphore = device->createSemaphoreUnique({});
 	auto renderFinishedFence = device->createFenceUnique({});
 
-	while (!glfwWindowShouldClose(window.get())) {
+	while (!glfwWindowShouldClose(window.get())) 
+	{
+		glfwWaitEvents();
 		glfwPollEvents();
 
 		auto result = device->acquireNextImageKHR(swapchain.get() ,numeric_limits<uint64_t>::max(),imageAvailableSemaphore.get(), nullptr);
 		uint32_t idx = result.value;
 
-		cout << idx << ':' << commandBuffers.size() << endl;
+		//cout << idx << ':' << commandBuffers.size() << endl;
 
 		vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 		pipelineQueue.submit({
@@ -872,6 +760,55 @@ int vkmain()
 
     }
 
+	{
+		vk::BufferCreateInfo bufferInfo = { {}, allocation->GetSize(), vk::BufferUsageFlagBits::eTransferDst };
+
+		VmaAllocationCreateInfo allocationInfo = {};
+		allocationInfo.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+
+		VkBuffer stagingBuffer;
+		VmaAllocation stagingAllocation;
+		vmaCreateBuffer(allocator, &static_cast<const VkBufferCreateInfo&>(bufferInfo), &allocationInfo, &stagingBuffer, &stagingAllocation, nullptr);
+
+		auto transferCommandBuffers = device->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ transferCommandPool.get(), vk::CommandBufferLevel::ePrimary, 1 });
+		auto cb = transferCommandBuffers[0].get();
+
+		cb.begin(vk::CommandBufferBeginInfo{});
+		cb.copyBuffer(buffer, stagingBuffer, { vk::BufferCopy{ 0, 0, allocation->GetSize() } });
+		cb.end();
+
+		transferQueue.submit(
+		{
+			vk::SubmitInfo{
+			0, nullptr, nullptr,
+			1, &cb,
+			0, nullptr
+		}
+		},
+			nullptr
+		);
+
+		transferQueue.waitIdle();
+
+		void* data;
+		vmaMapMemory(allocator, stagingAllocation, &data);
+
+		auto start = reinterpret_cast<Vertex*>(data);
+		for_each_n(
+			start,
+			256,
+			[](const Vertex& vertex)
+		{
+			cout << vertex.pos[0] << ", " << vertex.pos[1] << endl;
+		});
+
+		vmaUnmapMemory(allocator, stagingAllocation);
+
+		vmaDestroyBuffer(allocator, stagingBuffer, stagingAllocation);
+	}
+
+	while (!glfwWindowShouldClose(window.get())) glfwPollEvents();
+
 	vmaDestroyBuffer(allocator, buffer, allocation);
 	vmaDestroyAllocator(allocator);
 
@@ -881,7 +818,6 @@ int vkmain()
 
 int main()
 {
-
 	ofstream file("hello.txt");
 	file << "hi";
 	file.close();
