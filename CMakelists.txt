@@ -1,14 +1,59 @@
 project(vktest)
 cmake_minimum_required(VERSION 3.10)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -std=c++17")
+set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMake")
+include(cotire)
+
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 
 add_executable(${PROJECT_NAME} main.cpp)
 
 find_package(Vulkan REQUIRED)
-find_package(glfw3 3.3 REQUIRED)
 
+if (WIN32)
+	set(GLFW3_PATH "glfw3")
+
+	add_subdirectory(${GLFW3_PATH})
+	include_directories(${GLFW3_PATH}/include)
+	target_link_libraries(${PROJECT_NAME} glfw ${GLFW_LIBRARIES})
+else()
+	find_package(glfw3 3.3 REQUIRED)
+endif ()
+
+set(GLSL_VALIDATOR "glslangValidator")
+file(GLOB_RECURSE GLSL_SOURCE_FILES
+	"shaders/*.frag"
+	"shaders/*.vert"
+	"shaders/*.comp"
+	)
+
+foreach(GLSL ${GLSL_SOURCE_FILES})
+	get_filename_component(FILE_NAME ${GLSL} NAME)
+	get_filename_component(FILE_EXT ${GLSL} EXT)
+	message(STATUS "Found ${FILE_EXT} shader '${FILE_NAME}'")
+	set(SPIRV "${PROJECT_BINARY_DIR}/shaders/${FILE_NAME}.spv")
+	add_custom_command(
+		OUTPUT ${SPIRV}
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${PROJECT_BINARY_DIR}/shaders/"
+		COMMAND ${GLSL_VALIDATOR} -V ${GLSL} -o ${SPIRV}
+		DEPENDS ${GLSL})
+	list(APPEND SPIRV_BINARY_FILES ${SPIRV})
+endforeach(GLSL)
+
+add_custom_target(
+	SpirvShaders 
+	DEPENDS ${SPIRV_BINARY_FILES}
+	)
+
+add_dependencies(${PROJECT_NAME} SpirvShaders)
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_BINARY_DIR}/shaders"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
+        )
 
 if (VULKAN_FOUND)
 	message(STATUS "Found Vulkan, Including and Linking now")
@@ -16,3 +61,4 @@ if (VULKAN_FOUND)
 	target_link_libraries(${PROJECT_NAME} ${Vulkan_LIBRARIES} glfw)
 endif (VULKAN_FOUND)
 
+cotire(vktest)

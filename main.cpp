@@ -4,16 +4,21 @@
 #include <iterator>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
 
 #include <vulkan/vulkan.hpp>
 
 #define VMA_IMPLEMENTATION
 #include "vk_mem_alloc.h"
+
+#define NOMINMAX
 #include "termcolor.hpp"
+
+//#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+
 
 using namespace std;
 
@@ -289,7 +294,7 @@ auto createInstance()
 auto createSurface(vk::Instance instance, GLFWwindow* window)
 {
 	vk::SurfaceKHR surface;
-	auto result = static_cast<vk::Result>(glfwCreateWindowSurface(instance,window,nullptr, reinterpret_cast<VkSurfaceKHR*>(&surface)));
+	auto result = static_cast<vk::Result>(glfwCreateWindowSurface(instance, window, nullptr, reinterpret_cast<VkSurfaceKHR*>(&surface)));
 
 	vk::ObjectDestroy<vk::Instance> deleter(instance);
 	return vk::createResultValue(result, surface, "createSurface", deleter);
@@ -300,29 +305,94 @@ auto createDebugThinger(vk::Instance instance)
 	return instance.createDebugReportCallbackEXTUnique(
 		vk::DebugReportCallbackCreateInfoEXT{
 			vk::DebugReportFlagBitsEXT::eDebug | vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eInformation | vk::DebugReportFlagBitsEXT::ePerformanceWarning | vk::DebugReportFlagBitsEXT::eWarning,
-			callback_fn
+			callback_fn,
+			nullptr
 		}
 	);
 }
 
-auto createDevice(vk::Instance instance)
+template<typename Func>
+auto findQueue(std::vector<vk::QueueFamilyProperties>& queuePropertiesList, Func func)
 {
+	uint32_t i = static_cast<uint32_t>(queuePropertiesList.size());
+	auto it = find_if(
+		queuePropertiesList.rbegin(),
+		queuePropertiesList.rend(),
+		[&func, &i](const vk::QueueFamilyProperties properties)
+		{
+			--i;
+			return properties.queueCount > 0 && func(i,properties);
+		}
+	);
 
-	auto physicalDevice = instance.enumeratePhysicalDevices().front();
+	assert(it != queuePropertiesList.rend());
+
+	return make_pair(i, it->queueCount--);
+}
+
+template<typename ... Types>
+auto findQueues(std::vector<vk::QueueFamilyProperties>& queuePropertiesList, Types ... args)
+{
+	return make_tuple(
+		findQueue(
+			queuePropertiesList,
+			[args](uint32_t i, const vk::QueueFamilyProperties& properties) 
+			{
+				return (properties.queueFlags & args) == args;
+			}
+		)...
+	);
+}
+
+pair<uint32_t,uint32_t> pipelineQueueFamily, transferQueueFamily, presentQueueFamily; // <family,queue>
+
+auto createDevice(vk::Instance instance, vk::SurfaceKHR surface)
+{
+	auto physicalDevices = instance.enumeratePhysicalDevices();
+
+	for (auto& physicalDevice : physicalDevices)
+	{
+		auto properties = physicalDevice.getProperties();
+		cout << "PhysicalDevice " << properties.deviceName << " " << vk::to_string(properties.deviceType) << endl;
+	}
+
+	auto physicalDevice = physicalDevices.front();
 	for(auto extension : physicalDevice.enumerateDeviceExtensionProperties())
 	{
 		cout << "DeviceExtension: " << extension.extensionName << '(' << extension.specVersion << ')' << endl;
 	}
 
-	physicalDevice.getQueueFamilyProperties();
+	auto queuePropertiesList = physicalDevice.getQueueFamilyProperties();
 
+	tie(pipelineQueueFamily,
+		transferQueueFamily) = findQueues(queuePropertiesList,
+		vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute,
+		vk::QueueFlagBits::eTransfer
+	);
 
-	float priorities[2] = {1.0f, 1.0f};
-	vector<vk::DeviceQueueCreateInfo> queues{
-		vk::DeviceQueueCreateInfo{{}, 0, 2, priorities}
-	};
+	presentQueueFamily = findQueue(queuePropertiesList, [physicalDevice, surface](uint32_t i, const vk::QueueFamilyProperties&) {return physicalDevice.getSurfaceSupportKHR(i, surface); });
+
+	std::unordered_map<uint32_t, uint32_t> queueCounts;
+	pipelineQueueFamily.second = queueCounts[pipelineQueueFamily.first]++;
+	transferQueueFamily.second = queueCounts[transferQueueFamily.first]++;
+	presentQueueFamily.second = queueCounts[presentQueueFamily.first]++;
+
+	float priorities[] = { 1.0f, 1.0f, 1.0f, 1.0f }; // Ensure this is has as many numbers as queues.
+
+	vector<vk::DeviceQueueCreateInfo> queues;
+	transform(
+		queueCounts.begin(),
+		queueCounts.end(),
+		back_inserter(queues),
+		[&priorities](auto p)
+		{
+			return vk::DeviceQueueCreateInfo{ vk::DeviceQueueCreateFlags{}, p.first, p.second, priorities};
+		}
+	);
+
 
 	vk::PhysicalDeviceFeatures features;
+	features.largePoints = true;
 
 	extensions[0] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 	
@@ -382,7 +452,7 @@ auto createSwapchain(vk::Device device, vk::PhysicalDevice physicalDevice, vk::S
 		0, nullptr,
 		vk::SurfaceTransformFlagBitsKHR::eIdentity,
 		vk::CompositeAlphaFlagBitsKHR::eOpaque,
-		vk::PresentModeKHR::eImmediate,
+		vk::PresentModeKHR::eFifo,
 		true
 	});
 
@@ -391,7 +461,7 @@ auto createSwapchain(vk::Device device, vk::PhysicalDevice physicalDevice, vk::S
 auto createComputePipeline(vk::Device device, vk::PipelineLayout pipelineLayout)
 {
 
-	auto module = createShaderModule(device, "build/shader.comp.spirv");
+	auto module = createShaderModule(device, "shaders/shader.comp.spv");
 	return device.createComputePipelineUnique({}, 
 		vk::ComputePipelineCreateInfo{
 			{},
@@ -450,7 +520,7 @@ auto createRenderPass(vk::Device device)
 
 auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::PipelineLayout pipelineLayout)
 {
-	auto vertexShader = createShaderModule(device, "build/shader.vert.spirv"), fragmentShader = createShaderModule(device, "build/shader.frag.spirv");
+	auto vertexShader = createShaderModule(device, "shaders/shader.vert.spv"), fragmentShader = createShaderModule(device, "shaders/shader.frag.spv");
 
 	vector<vk::PipelineShaderStageCreateInfo> stages{
 		vk::PipelineShaderStageCreateInfo{
@@ -547,8 +617,18 @@ auto createCommandBuffers(vk::Device device, size_t size, Func func)
 	return make_pair(move(commandPool),move(commandBuffers));
 }
 
+struct Vertex
+{
+	float pos[3];
+	float vel[3];
+};
 
-int main()
+float rand_float()
+{
+	return rand() / float(RAND_MAX);
+}
+
+int vkmain()
 {
 	for(auto& extension : vk::enumerateInstanceExtensionProperties())
 	{
@@ -560,8 +640,12 @@ int main()
 
 	auto debugReportCallback = createDebugThinger(instance.get());
 
-	auto [device,physicalDevice] = createDevice(instance.get());
-	auto transferQueue = device->getQueue(0, 0), computeQueue = device->getQueue(0, 1);
+	auto [device,physicalDevice] = createDevice(instance.get(), surface.get());
+	
+
+	auto pipelineQueue = device->getQueue(pipelineQueueFamily.first, pipelineQueueFamily.first),
+		 transferQueue = device->getQueue(transferQueueFamily.first, transferQueueFamily.second),
+		 presentQueue = device->getQueue(presentQueueFamily.first, presentQueueFamily.second);
 
 	auto swapchain = createSwapchain(device.get(), physicalDevice, surface.get());
 
@@ -633,24 +717,14 @@ int main()
 	vk::Buffer buffer;
 	VmaAllocation allocation;
 	{
-		vk::BufferCreateInfo bufferInfo = {{}, 2*3*sizeof(float)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eVertexBuffer};
+		vk::BufferCreateInfo bufferInfo = {{}, sizeof(Vertex)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer};
 		
 		VmaAllocationCreateInfo allocationInfo = {};
-		allocationInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		allocationInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 		
 		VkBuffer bufferhandle;
 		vmaCreateBuffer(allocator, &static_cast<const VkBufferCreateInfo&>(bufferInfo), &allocationInfo, &bufferhandle, &allocation, nullptr);
-
 		buffer = bufferhandle;
-
-		void* data;
-		vmaMapMemory(allocator, allocation, &data);
-
-		float* start = reinterpret_cast<float*>(data);
-		float* end = start+2*3*256;
-		generate(start,end, [](){return rand()/float(RAND_MAX);});
-
-		vmaUnmapMemory(allocator,allocation);
 	}
 
 	vk::DescriptorPoolSize poolSize{vk::DescriptorType::eStorageBuffer,2};
@@ -658,7 +732,7 @@ int main()
 	auto descriptorSets = device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{descriptorPool.get(), 1, &descriptorSetLayout.get()});
 
 
-	vk::DescriptorBufferInfo bufferInfo{buffer,allocation->GetOffset(), allocation->GetSize()};
+	vk::DescriptorBufferInfo bufferInfo{buffer, 0, allocation->GetSize()};
 	device->updateDescriptorSets({vk::WriteDescriptorSet{descriptorSets[0],0,0,1,vk::DescriptorType::eStorageBuffer, nullptr, &bufferInfo}},{});
 
 	auto fence = device->createFenceUnique(vk::FenceCreateInfo{});
@@ -666,8 +740,31 @@ int main()
 
 	auto [commandPool, commandBuffers] = createCommandBuffers(
 		device.get(), framebuffers.size(),
-		[renderPass=renderPass.get(),&framebuffers,graphicsPipeline=graphicsPipeline.get(), buffer](vk::CommandBuffer cb, size_t i)
+		[
+			renderPass=renderPass.get(),
+			graphicsPipeline=graphicsPipeline.get(),
+			computePipeline = computePipeline.get(),
+			&framebuffers,
+			buffer,
+			&descriptorSets,
+			computePipelineLayout=computePipelineLayout.get(),
+			family = pipelineQueueFamily.first
+		](vk::CommandBuffer cb, size_t i)
 		{
+
+			cb.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);
+			cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, descriptorSets, {});
+			cb.dispatch(1, 1, 1);
+
+			cb.pipelineBarrier(
+				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eAllGraphics,
+				{},
+				{},
+				{
+					vk::BufferMemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eShaderRead, family, family, buffer, 0, sizeof(Vertex) * 256 }
+				},
+				{}
+			);
 
 			vector<vk::ClearValue> clearValues {
 				vk::ClearColorValue().setFloat32({1.0f, 0.0f, 0.0f, 1.0f})
@@ -690,47 +787,88 @@ int main()
 		}
 	);
 
+	auto transferCommandPool = device->createCommandPoolUnique(vk::CommandPoolCreateInfo{ {}, transferQueueFamily.first });
 
-	/*vector<vk::SubmitInfo> repeats;
-	repeats.resize(125,vk::SubmitInfo{0,nullptr, nullptr, 1, commandBuffers.data()});
+	{
+		vk::BufferCreateInfo bufferInfo = { {}, allocation->GetSize(), vk::BufferUsageFlagBits::eTransferSrc};
 
-	cout << "Press enter to submit:" << endl;
-	cin.get();
-	computeQueue.submit(repeats,fence.get());
+		VmaAllocationCreateInfo allocationInfo = {};
+		allocationInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
 
-	auto t0 = chrono::high_resolution_clock::now();
-	device->waitForFences({fence.get()}, true, numeric_limits<uint32_t>::max());
-	auto t1 = chrono::high_resolution_clock::now();
+		VkBuffer stagingBuffer;
+		VmaAllocation stagingAllocation;
+		vmaCreateBuffer(allocator, &static_cast<const VkBufferCreateInfo&>(bufferInfo), &allocationInfo, &stagingBuffer, &stagingAllocation, nullptr);
 
-	chrono::duration<double,milli> dif = t1 - t0;
+		void* data;
+		vmaMapMemory(allocator, stagingAllocation, &data);
 
-		cout << "125 took " << dif.count() << "ms." << endl;*/
+		auto start = reinterpret_cast<Vertex*>(data);
+		srand(static_cast<uint32_t>(time(NULL)));
+		generate_n(
+			start,
+			256,
+			[]()
+		{
+			return Vertex{
+				{ rand_float(), rand_float(), rand_float() },
+				{ rand_float(), rand_float(), rand_float() }
+			};
+		}
+		);
 
-		auto imageAvailableSemaphore = device->createSemaphoreUnique({}), imageReadySemaphore = device->createSemaphoreUnique({});
+		vmaUnmapMemory(allocator, stagingAllocation);
 
-		while (!glfwWindowShouldClose(window.get())) {
-			glfwPollEvents();
+		auto transferCommandBuffers = device->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ transferCommandPool.get(), vk::CommandBufferLevel::ePrimary, 1 });
+		auto cb = transferCommandBuffers[0].get();
+		
+		cb.begin(vk::CommandBufferBeginInfo{});
+		cb.copyBuffer(stagingBuffer, buffer, { vk::BufferCopy{0, 0, allocation->GetSize()} });
+		cb.end();
 
-			auto result = device->acquireNextImageKHR(swapchain.get() ,numeric_limits<uint64_t>::max(),imageAvailableSemaphore.get(), nullptr);
-			uint32_t idx = result.value;
-
-			cout << idx << ':' << commandBuffers.size() << endl;
-
-			vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-			computeQueue.submit({
+		transferQueue.submit(
+			{
 				vk::SubmitInfo{
-					1, &imageAvailableSemaphore.get(), &waitStage,
-					1, &commandBuffers[idx],
-					1, &imageReadySemaphore.get()
+					0, nullptr, nullptr,
+					1, &cb,
+					0, nullptr
 				}
-			}, nullptr);
+			},
+			nullptr
+		);
 
-			computeQueue.presentKHR(vk::PresentInfoKHR{
+		transferQueue.waitIdle();
+	}
+
+	auto imageAvailableSemaphore = device->createSemaphoreUnique({}), imageReadySemaphore = device->createSemaphoreUnique({});
+	auto renderFinishedFence = device->createFenceUnique({});
+
+	while (!glfwWindowShouldClose(window.get())) {
+		glfwPollEvents();
+
+		auto result = device->acquireNextImageKHR(swapchain.get() ,numeric_limits<uint64_t>::max(),imageAvailableSemaphore.get(), nullptr);
+		uint32_t idx = result.value;
+
+		cout << idx << ':' << commandBuffers.size() << endl;
+
+		vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+		pipelineQueue.submit({
+			vk::SubmitInfo{
+				1, &imageAvailableSemaphore.get(), &waitStage,
+				1, &commandBuffers[idx],
+				1, &imageReadySemaphore.get()
+			}
+		}, renderFinishedFence.get());
+
+		presentQueue.presentKHR(
+			vk::PresentInfoKHR{
 				1, &imageReadySemaphore.get(),
 				1, &swapchain.get(),
-				&idx,
-				nullptr
-			});
+				&idx
+			}
+		);
+
+		device->waitForFences({ renderFinishedFence.get() }, true, numeric_limits<uint64_t>::max());
+		device->resetFences({ renderFinishedFence.get() });
 
     }
 
@@ -738,4 +876,22 @@ int main()
 	vmaDestroyAllocator(allocator);
 
 	return 0;
+}
+
+
+int main()
+{
+
+	ofstream file("hello.txt");
+	file << "hi";
+	file.close();
+
+	try {
+		return vkmain();
+	}
+	catch(std::runtime_error e)
+	{
+		cerr << e.what() << endl;
+		return 1;
+	}
 }
