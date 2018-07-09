@@ -363,7 +363,7 @@ auto createRenderPass(vk::Device device)
 			{},
 			swapchainFormat,
 			vk::SampleCountFlagBits::e1,
-			vk::AttachmentLoadOp::eDontCare,
+			vk::AttachmentLoadOp::eClear,
 			vk::AttachmentStoreOp::eStore,
 			vk::AttachmentLoadOp::eDontCare,
 			vk::AttachmentStoreOp::eDontCare,
@@ -402,6 +402,17 @@ auto createRenderPass(vk::Device device)
 
 }
 
+struct Vertex
+{
+	float pos[3];
+	float _pad;
+	float vel[3];
+	float __pad;
+};
+
+static_assert(sizeof(Vertex) == sizeof(float) * 8);
+
+
 auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::PipelineLayout pipelineLayout)
 {
 	auto vertexShader = createShaderModule(device, "shaders/shader.vert.spv"), fragmentShader = createShaderModule(device, "shaders/shader.frag.spv");
@@ -423,10 +434,10 @@ auto createGraphicsPipeline(vk::Device device, vk::RenderPass renderPass, vk::Pi
 		},
 	};
 
-	vk::VertexInputBindingDescription vertexBinding{0,sizeof(float)*6,vk::VertexInputRate::eVertex};
+	vk::VertexInputBindingDescription vertexBinding{0,sizeof(Vertex),vk::VertexInputRate::eVertex};
 	vk::VertexInputAttributeDescription vertexAttribute{0,0, vk::Format::eR32G32B32Sfloat, 0};
 	vk::PipelineVertexInputStateCreateInfo vertexInput{{}, 1, &vertexBinding, 1, &vertexAttribute};
-	vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{{},vk::PrimitiveTopology::ePointList,0};
+	vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{{},vk::PrimitiveTopology::ePointList, false};
 	//vk::PipelineTessellationStateCreateInfo tesselation{{}, ?};
 	vk::Viewport viewport{0.0f,0.0f, static_cast<float>(swapchainExtent.width), static_cast<float>(swapchainExtent.height), 0.0f, 1.0f};
 	vk::Rect2D scissor{{},swapchainExtent};
@@ -501,15 +512,18 @@ auto createCommandBuffers(vk::Device device, size_t size, Func func)
 	return make_pair(move(commandPool),move(commandBuffers));
 }
 
-struct Vertex
-{
-	float pos[3];
-	float vel[3];
-};
 
 float rand_float()
 {
-	return rand() / float(RAND_MAX);
+	return 2 * rand() / float(RAND_MAX) - 1.0f;
+}
+
+bool render = true;
+
+void mousebuttonfun(GLFWwindow* window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_1 && action == GLFW_PRESS)
+		render = true;
 }
 
 int vkmain()
@@ -638,7 +652,7 @@ int vkmain()
 
 			cb.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);
 			cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, descriptorSets, {});
-			cb.dispatch(1, 1, 1);
+			cb.dispatch(256, 1, 1);
 
 			cb.pipelineBarrier(
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eAllGraphics,
@@ -651,7 +665,7 @@ int vkmain()
 			);
 
 			vector<vk::ClearValue> clearValues {
-				vk::ClearColorValue().setFloat32({1.0f, 0.0f, 0.0f, 1.0f})
+				vk::ClearColorValue().setFloat32({0.0f, 0.0f, 0.0f, 1.0f})
 			};
 
 			cb.beginRenderPass(vk::RenderPassBeginInfo{
@@ -694,11 +708,14 @@ int vkmain()
 			[]()
 		{
 			return Vertex{
-				{ rand_float(), rand_float(), rand_float() },
-				{ rand_float(), rand_float(), rand_float() }
+				{ rand_float(), rand_float(), 0.0f }, 0.0f,
+				{ 0.1f * rand_float(), 0.1f * rand_float(), 0.0f }, 0.0f,
 			};
 		}
 		);
+
+		//start->pos[0] = 0.5f, start->pos[1] = -0.5f, start->pos[2] = 0.0f;
+		//start->vel[0] = -10.0f, start->vel[1] = 0.0f, start->vel[2] = 0.0f;
 
 		vmaUnmapMemory(allocator, stagingAllocation);
 
@@ -728,10 +745,11 @@ int vkmain()
 	auto imageAvailableSemaphore = device->createSemaphoreUnique({}), imageReadySemaphore = device->createSemaphoreUnique({});
 	auto renderFinishedFence = device->createFenceUnique({});
 
+	glfwSetMouseButtonCallback(window.get(), mousebuttonfun);
+
 	while (!glfwWindowShouldClose(window.get())) 
 	{
-		glfwWaitEvents();
-		glfwPollEvents();
+		render = false;
 
 		auto result = device->acquireNextImageKHR(swapchain.get() ,numeric_limits<uint64_t>::max(),imageAvailableSemaphore.get(), nullptr);
 		uint32_t idx = result.value;
@@ -757,6 +775,9 @@ int vkmain()
 
 		device->waitForFences({ renderFinishedFence.get() }, true, numeric_limits<uint64_t>::max());
 		device->resetFences({ renderFinishedFence.get() });
+
+		//while (!render && !glfwWindowShouldClose(window.get()))
+			glfwPollEvents();
 
     }
 
@@ -796,7 +817,7 @@ int vkmain()
 		auto start = reinterpret_cast<Vertex*>(data);
 		for_each_n(
 			start,
-			256,
+			16,
 			[](const Vertex& vertex)
 		{
 			cout << vertex.pos[0] << ", " << vertex.pos[1] << endl;

@@ -31,7 +31,7 @@ vec3 colors[4] = vec3[](
 
 
 void main() {
-    gl_Position = vec4(positions[gl_VertexIndex%4] , 0, 1.0);
-    fragColor = colors[gl_VertexIndex%3];//sigmoid(pos.z) * vec3(1,1,0);
+    gl_Position = vec4(pos.xy,0,1);//vec4(positions[gl_VertexIndex%4] , 0, 1.0);
+    fragColor = sigmoid(pos.z) * vec3(1,1,0);
 	gl_PointSize = 3;
 }

@@ -3,12 +3,13 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-const float TIME_STEP = 1.0f;
+const float TIME_STEP = 0.01;
+const float kG = 0.001;
 
 struct particle_state
 {
-    vec3 position;
-    vec3 velocity;
+    vec3 position; //vec4 padding
+    vec3 velocity; //vec4 padding
 };
 
 layout(std140, binding=0) buffer State
@@ -16,22 +17,23 @@ layout(std140, binding=0) buffer State
     particle_state particles[256];
 };
 
-layout(local_size_x = 256) in;
-
 void main()
 {
-    particles[gl_LocalInvocationIndex].position += particles[gl_LocalInvocationIndex].velocity * TIME_STEP;
-    particles[gl_LocalInvocationIndex].velocity.y -= 9.81*TIME_STEP;
-    
-    /*vec3 pos = particles[gl_LocalInvocationIndex].position;
-    vec3 acc = vec3(0,0,0);
-    for(uint i = 0; i < 256; ++i)
+    vec2 pos = particles[gl_WorkGroupID.x].position.xy;
+    vec2 acc = vec2(0);
+    for(uint i = 0; i < 4; ++i)
     {
-        vec3 diff = 
-        float distSquared = dot(diff,diff);
+        vec2 offset = (particles[i].position.xy - pos);
+        float distSquared = dot(offset,offset);
 
-        acc += kG/distSqr
+		if(distSquared > 0.01)
+			acc += kG/distSquared * normalize(offset);
+    }
+	
+	barrier();
 
-    }*/
-
+    particles[gl_WorkGroupID.x].position.xy += particles[gl_GlobalInvocationID.x].velocity.xy * TIME_STEP;
+	particles[gl_WorkGroupID.x].velocity.xy += acc * TIME_STEP;
+	
+	//particles[gl_WorkGroupID.x].position += vec3(-0.001, 0.001, 0);
 }
