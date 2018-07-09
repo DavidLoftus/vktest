@@ -15,23 +15,15 @@ float sigmoid(float x)
     return 1/(1+exp(-x));
 }
 
-vec2 positions[4] = vec2[](
-    vec2(-0.5, -0.5),
-    vec2(0.5, 0.5),
-    vec2(-0.5, 0.5),
-    vec2(0.5, -0.5)
-);
-
-vec3 colors[4] = vec3[](
-    vec3(1.0, 0.0, 0.0),
-    vec3(0.0, 1.0, 0.0),
-    vec3(0.0, 0.0, 1.0),
-    vec3(1.0, 0.0, 1.0)
-);
-
+vec3 hsv2rgb(vec3 c)
+{
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
 
 void main() {
     gl_Position = vec4(pos.xy,0,1);//vec4(positions[gl_VertexIndex%4] , 0, 1.0);
-    fragColor = sigmoid(pos.z) * vec3(1,1,0);
-	gl_PointSize = 3;
+	float distSquared = dot(pos,pos);
+    fragColor = hsv2rgb(vec3(pow(0.0625,distSquared),1,0.5));
 }

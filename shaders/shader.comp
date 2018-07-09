@@ -3,8 +3,8 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-const float TIME_STEP = 0.01;
-const float kG = 0.001;
+const float TIME_STEP = 0.001;
+const float kG = 0.005;
 
 struct particle_state
 {
@@ -14,8 +14,9 @@ struct particle_state
 
 layout(std140, binding=0) buffer State
 {
-    particle_state particles[256];
+    particle_state particles[100000];
 };
+
 
 void main()
 {

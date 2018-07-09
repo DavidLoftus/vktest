@@ -19,7 +19,11 @@
 //#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+//#ifdef _DEBUG
 #define RENDERDOC
+//#endif
+
+#define NPARTICLES 100000
 
 using namespace std;
 
@@ -515,7 +519,7 @@ auto createCommandBuffers(vk::Device device, size_t size, Func func)
 
 float rand_float()
 {
-	return 2 * rand() / float(RAND_MAX) - 1.0f;
+	return rand() / float(RAND_MAX) - 0.5f;
 }
 
 bool render = true;
@@ -615,7 +619,7 @@ int vkmain()
 	vk::Buffer buffer;
 	VmaAllocation allocation;
 	{
-		vk::BufferCreateInfo bufferInfo = {{}, sizeof(Vertex)*256, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eVertexBuffer};
+		vk::BufferCreateInfo bufferInfo = {{}, sizeof(Vertex)*NPARTICLES, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eVertexBuffer};
 		
 		VmaAllocationCreateInfo allocationInfo = {};
 		allocationInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -652,14 +656,14 @@ int vkmain()
 
 			cb.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);
 			cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, descriptorSets, {});
-			cb.dispatch(256, 1, 1);
+			cb.dispatch(NPARTICLES, 1, 1);
 
 			cb.pipelineBarrier(
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eAllGraphics,
 				{},
 				{},
 				{
-					vk::BufferMemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eShaderRead, family, family, buffer, 0, sizeof(Vertex) * 256 }
+					vk::BufferMemoryBarrier{vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eShaderRead, family, family, buffer, 0, sizeof(Vertex) * NPARTICLES }
 				},
 				{}
 			);
@@ -679,7 +683,7 @@ int vkmain()
 
 			cb.bindVertexBuffers(0, {buffer}, {0});
 
-			cb.draw(256, 1, 0, 0);
+			cb.draw(NPARTICLES, 1, 0, 0);
 
 			cb.endRenderPass();
 		}
@@ -704,7 +708,7 @@ int vkmain()
 		srand(static_cast<uint32_t>(time(NULL)));
 		generate_n(
 			start,
-			256,
+			NPARTICLES,
 			[]()
 		{
 			return Vertex{
@@ -747,9 +751,10 @@ int vkmain()
 
 	glfwSetMouseButtonCallback(window.get(), mousebuttonfun);
 
+	render = false;
+
 	while (!glfwWindowShouldClose(window.get())) 
 	{
-		render = false;
 
 		auto result = device->acquireNextImageKHR(swapchain.get() ,numeric_limits<uint64_t>::max(),imageAvailableSemaphore.get(), nullptr);
 		uint32_t idx = result.value;
@@ -776,8 +781,8 @@ int vkmain()
 		device->waitForFences({ renderFinishedFence.get() }, true, numeric_limits<uint64_t>::max());
 		device->resetFences({ renderFinishedFence.get() });
 
-		//while (!render && !glfwWindowShouldClose(window.get()))
-			glfwPollEvents();
+
+		glfwPollEvents();
 
     }
 
