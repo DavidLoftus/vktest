@@ -19,9 +19,7 @@
 //#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-//#ifdef _DEBUG
 #define RENDERDOC
-//#endif
 
 #define NPARTICLES 100000
 
@@ -136,9 +134,6 @@ auto createWindow()
 
 vector<const char*> layers{
 	"VK_LAYER_LUNARG_standard_validation",
-#ifdef RENDERDOC
-	"VK_LAYER_RENDERDOC_Capture"
-#endif
 }, extensions{VK_EXT_DEBUG_REPORT_EXTENSION_NAME};
 
 auto createInstance()
@@ -157,7 +152,7 @@ auto createInstance()
 
 	for(auto extension : extensions_copy) cout << "InstanceExtension " << extension << endl;
 
-	vk::ApplicationInfo appInfo{"vktest", 0, "Pomme", 0, VK_API_VERSION_1_1};
+	vk::ApplicationInfo appInfo{"vktest", 0, "Pomme", 0, VK_API_VERSION_1_0};
 	return vk::createInstanceUnique(
 		vk::InstanceCreateInfo{
 			{}, &appInfo,
@@ -578,7 +573,7 @@ int vkmain()
 		vk::DescriptorSetLayoutBinding{1, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}
 	};
 
-	auto descriptorSetLayout = device->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo{{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
+	auto descriptorSetLayout = device->createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo{ {}, static_cast<uint32_t>(bindings.size()), bindings.data()});
 
 	auto computePipelineLayout = device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, 1, &descriptorSetLayout.get()});
 	auto computePipeline = createComputePipeline(device.get(), computePipelineLayout.get());
