@@ -27,7 +27,7 @@ void main()
         vec2 offset = (particles[i].position.xy - pos);
         float distSquared = dot(offset,offset);
 
-		if(distSquared > 0.01)
+		if(distSquared > 0.001)
 			acc += kG/distSquared * normalize(offset);
     }
 	
