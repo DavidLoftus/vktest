@@ -2,24 +2,43 @@ project(vktest)
 cmake_minimum_required(VERSION 3.10)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMake")
-include(cotire)
+
+		
+# Source Files
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 
+set(EXTRA_FILES ${EXTRA_FILES} pipeline.cpp)
+
 add_executable(${PROJECT_NAME} main.cpp)
+target_sources(${PROJECT_NAME} PUBLIC ${EXTRA_FILES})
+
+find_package(glfw3 3.3 REQUIRED)
+if(GLFW3_FOUND)
+	include_directories(${GLFW3_INCLUDE_PATH})
+	target_link_libraries(${PROJECT_NAME} ${GLFW3_LIBRARY})
+endif()
+
+find_package(boost 1.61 REQUIRED)
+if(Boost_FOUND)
+	include_directories(${Boost_INCLUDE_DIRS})
+	target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
+endif()
 
 find_package(Vulkan REQUIRED)
+if (VULKAN_FOUND)
+	message(STATUS "Found Vulkan, Including and Linking now")
+	include_directories(${Vulkan_INCLUDE_DIRS})
+	target_link_libraries(${PROJECT_NAME} ${Vulkan_LIBRARIES})
+endif (VULKAN_FOUND)
 
-if (WIN32)
-	set(GLFW3_PATH "glfw3")
 
-	add_subdirectory(${GLFW3_PATH})
-	include_directories(${GLFW3_PATH}/include)
-	target_link_libraries(${PROJECT_NAME} glfw ${GLFW_LIBRARIES})
-else()
-	find_package(glfw3 3.3 REQUIRED)
-endif ()
+#########################
+#						#
+#	   GLSL Shaders		#
+#						#
+#########################
 
 set(GLSL_VALIDATOR "glslangValidator")
 file(GLOB_RECURSE GLSL_SOURCE_FILES
@@ -54,11 +73,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${PROJECT_BINARY_DIR}/shaders"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
         )
-
-if (VULKAN_FOUND)
-	message(STATUS "Found Vulkan, Including and Linking now")
-	include_directories(${Vulkan_INCLUDE_DIRS})
-	target_link_libraries(${PROJECT_NAME} ${Vulkan_LIBRARIES} glfw)
-endif (VULKAN_FOUND)
-
+		
+# Cotire
+include(cotire)
 cotire(vktest)
