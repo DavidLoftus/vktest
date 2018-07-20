@@ -2,17 +2,32 @@ project(vktest)
 cmake_minimum_required(VERSION 3.10)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMake")
-
+include(cotire)
 		
 # Source Files
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 
-set(EXTRA_FILES ${EXTRA_FILES} pipeline.cpp)
+list(APPEND SOURCE_FILES shader.cpp)
 
-add_executable(${PROJECT_NAME} main.cpp)
-target_sources(${PROJECT_NAME} PUBLIC ${EXTRA_FILES})
+list(APPEND HEADER_FILES pipeline.hpp)
+list(APPEND HEADER_FILES shader.hpp)
+
+
+add_executable(${PROJECT_NAME} main.cpp ${HEADER_FILES})
+target_sources(${PROJECT_NAME} PUBLIC ${SOURCE_FILES})
+
+
+if (WIN32)
+add_definitions("-DNOMINMAX")
+endif()
+
+add_definitions("-D_USE_MATH_DEFINES")
+
+
+# Libraries
 
 find_package(glfw3 3.3 REQUIRED)
 if(GLFW3_FOUND)
@@ -20,10 +35,12 @@ if(GLFW3_FOUND)
 	target_link_libraries(${PROJECT_NAME} ${GLFW3_LIBRARY})
 endif()
 
+
 find_package(boost 1.61 REQUIRED)
 if(Boost_FOUND)
 	include_directories(${Boost_INCLUDE_DIRS})
 	target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
+	add_definitions("-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS")
 endif()
 
 find_package(Vulkan REQUIRED)
@@ -33,6 +50,13 @@ if (VULKAN_FOUND)
 	target_link_libraries(${PROJECT_NAME} ${Vulkan_LIBRARIES})
 endif (VULKAN_FOUND)
 
+find_package(glm REQUIRED)
+if (GLM_FOUND)
+	message(STATUS "Found GLM, Including ${GLM_INCLUDE_DIRS}")
+	include_directories(${GLM_INCLUDE_DIRS})
+endif ()
+
+include_directories(meta/include)
 
 #########################
 #						#
@@ -61,9 +85,11 @@ foreach(GLSL ${GLSL_SOURCE_FILES})
 endforeach(GLSL)
 
 add_custom_target(
-	SpirvShaders 
+	SpirvShaders
 	DEPENDS ${SPIRV_BINARY_FILES}
+	SOURCES ${GLSL_SOURCE_FILES}
 	)
+source_group("Shaders" FILES ${GLSL_SOURCE_FILES})
 
 add_dependencies(${PROJECT_NAME} SpirvShaders)
 
@@ -73,7 +99,5 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${PROJECT_BINARY_DIR}/shaders"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
         )
-		
-# Cotire
-include(cotire)
+
 cotire(vktest)
