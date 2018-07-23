@@ -1,13 +1,10 @@
+#ifdef _MSC_VER
+#	pragma once
+#endif
 #ifndef PIPELINE_HPP
 #define PIPELINE_HPP
 
-#ifdef MSVC
-#	pragma once
-#endif
-
 #include <boost/hana.hpp>
-#include <boost/core/demangle.hpp>
-#include <boost/lambda/construct.hpp>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.hpp>
 #include <iostream>
@@ -185,18 +182,17 @@ struct graphics_pipeline
 	PipelineInfo info;
 	vk::UniquePipeline m_pipeline;
 
-	void create(vk::Device device, vk::RenderPass renderPass, std::vector<std::string> shaders)
+	void create(std::vector<std::string> shaderFiles)
 	{
-
+		std::vector<Shader> shaders;
 		std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
-		std::vector<vk::UniqueShaderModule> shaderModules;
 
+		shaders.reserve(shaders.size());
 		shaderStages.reserve(shaders.size());
-		shaderModules.reserve(shaders.size());
-		for (auto& file : shaders)
+		for (auto& file : shaderFiles)
 		{
-			shaderModules.push_back(create_shader(device, file));
-			shaderStages.emplace_back(vk::PipelineShaderStageCreateFlags{}, get_shader_stage(file), shaderModules.back().get(), "main");
+			shaders.emplace_back(std::move(file));
+			shaderStages.push_back(shaders.back().getStageInfo());
 		}
 
 
@@ -235,8 +231,8 @@ struct graphics_pipeline
 
 		//vk::PipelineTessellationStateCreateInfo tessellationState{};
 
-		vk::Viewport viewport{ 0.0f, 0.0f, (float)swapchainExtent.width, (float)swapchainExtent.height, 0.0f, 1.0f };
-		vk::Rect2D scissor{ {}, swapchainExtent };
+		vk::Viewport viewport{ 0.0f, 0.0f, (float)vkRenderCtx.swapchainExtent.width, (float)vkRenderCtx.swapchainExtent.height, 0.0f, 1.0f };
+		vk::Rect2D scissor{ {}, vkRenderCtx.swapchainExtent };
 
 		vk::PipelineViewportStateCreateInfo viewportState{ {}, 1, &viewport, 1, &scissor };
 
@@ -262,7 +258,7 @@ struct graphics_pipeline
 			static_cast<uint32_t>(colorBlendAttachments.size()), colorBlendAttachments.data(),
 		};
 
-		auto pipelineLayout = device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
+		auto pipelineLayout = vkRenderCtx.device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
 
 		vk::GraphicsPipelineCreateInfo pipelineCreateInfo{
 			{},
@@ -277,10 +273,10 @@ struct graphics_pipeline
 			&colorBlendState,
 			nullptr,
 			pipelineLayout.get(),
-			renderPass
+			vkRenderCtx.renderPass
 		};
 
-		m_pipeline = device.createGraphicsPipelineUnique(nullptr, pipelineCreateInfo);
+		m_pipeline = vkRenderCtx.device.createGraphicsPipelineUnique(nullptr, pipelineCreateInfo);
 
 	}
 
