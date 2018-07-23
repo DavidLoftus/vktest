@@ -10,11 +10,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 
+list(APPEND SOURCE_FILES renderer.cpp)
+list(APPEND SOURCE_FILES scene.cpp)
 list(APPEND SOURCE_FILES shader.cpp)
 
-list(APPEND HEADER_FILES pipeline.hpp)
+list(APPEND HEADER_FILES renderer.hpp)
+list(APPEND HEADER_FILES scene.hpp)
 list(APPEND HEADER_FILES shader.hpp)
-
+list(APPEND HEADER_FILES pipeline.hpp)
 
 add_executable(${PROJECT_NAME} main.cpp ${HEADER_FILES})
 target_sources(${PROJECT_NAME} PUBLIC ${SOURCE_FILES})
@@ -56,7 +59,8 @@ if (GLM_FOUND)
 	include_directories(${GLM_INCLUDE_DIRS})
 endif ()
 
-include_directories(meta/include)
+include_directories(libraries/meta/include)
+include_directories(libraries/include/)
 
 #########################
 #						#
