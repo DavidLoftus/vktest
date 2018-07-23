@@ -10,16 +10,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 
+list(APPEND SOURCE_FILES main.cpp)
 list(APPEND SOURCE_FILES renderer.cpp)
 list(APPEND SOURCE_FILES scene.cpp)
 list(APPEND SOURCE_FILES shader.cpp)
 
+list(APPEND HEADER_FILES stdafx.h)
 list(APPEND HEADER_FILES renderer.hpp)
 list(APPEND HEADER_FILES scene.hpp)
 list(APPEND HEADER_FILES shader.hpp)
 list(APPEND HEADER_FILES pipeline.hpp)
 
-add_executable(${PROJECT_NAME} main.cpp ${HEADER_FILES})
+add_executable(${PROJECT_NAME} stdafx.cpp ${HEADER_FILES})
 target_sources(${PROJECT_NAME} PUBLIC ${SOURCE_FILES})
 
 

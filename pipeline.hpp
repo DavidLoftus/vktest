@@ -8,7 +8,7 @@
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.hpp>
 #include <iostream>
-#include <typeinfo>
+#include <string>
 
 #include "shader.hpp"
 

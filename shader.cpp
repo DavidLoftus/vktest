@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "shader.hpp"
 #include <fstream>
 #include <sstream>

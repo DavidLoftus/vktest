@@ -3,7 +3,6 @@
 #endif
 #ifndef SCENE_HPP
 #define SCENE_HPP
-#include <unordered_map>
 #include <vulkan/vulkan.hpp>
 #include <boost/hana/adapt_struct.hpp>
 

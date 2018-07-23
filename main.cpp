@@ -1,34 +1,24 @@
-#define VMA_IMPLEMENTATION
-#ifdef WIN32
-#include <windows.h>
-#endif
+#include "stdafx.h"
+
 #include <math.h>
 #include <iostream>
 #include <vector>
 #include <fstream>
-#include <iterator>
 #include <algorithm>
-#include <unordered_map>
-#include <unordered_set>
-#include <memory>
 
 #include <boost/hana/define_struct.hpp>
 
 #include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
 #include <GLFW/glfw3.h>
-#include "termcolor.hpp"
-#include "vk_mem_alloc.h"
+#include <termcolor.hpp>
+
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
 
 #include "shader.hpp"
 #include "renderer.hpp"
 #include "scene.hpp"
-
-
-
-#define RENDERDOC
-
-#define NPARTICLES 100
 
 std::ostream& operator<<(std::ostream& os, vk::DebugReportFlagsEXT flags)
 {
