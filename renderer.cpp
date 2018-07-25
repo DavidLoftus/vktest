@@ -1,7 +1,11 @@
 #include "stdafx.h"
 #include "renderer.hpp"
-#include "pipeline.hpp"
 #include <stdlib.h>
+#include <stb_image.h>
+#include <boost/hana.hpp>
+#include "shader.hpp"
+
+namespace hana = boost::hana;
 
 VkResult vkCreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback)
 {
@@ -15,8 +19,27 @@ void vkDestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackE
 	pfn_vkDestroyDebugReportCallbackEXT(instance, callback, pAllocator);
 }
 
-
 vkRenderCtx_t vkRenderCtx;
+
+
+const vk::PipelineVertexInputStateCreateInfo GraphicsPipelineDefaults::vertexInputState;
+const vk::PipelineInputAssemblyStateCreateInfo GraphicsPipelineDefaults::inputAssemblyState{ {}, vk::PrimitiveTopology::eTriangleList };
+const vk::PipelineTessellationStateCreateInfo GraphicsPipelineDefaults::tessellationState;
+const vk::PipelineViewportStateCreateInfo GraphicsPipelineDefaults::viewportState;
+const vk::PipelineRasterizationStateCreateInfo GraphicsPipelineDefaults::rasterizationState{ {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eBack, vk::FrontFace::eClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f };
+const vk::PipelineMultisampleStateCreateInfo GraphicsPipelineDefaults::multisampleState;
+const vk::PipelineDepthStencilStateCreateInfo GraphicsPipelineDefaults::depthStencilState;
+
+const vk::PipelineColorBlendAttachmentState colorBlendAttachment = vk::PipelineColorBlendAttachmentState().setColorWriteMask(
+	vk::ColorComponentFlagBits::eR |
+	vk::ColorComponentFlagBits::eG |
+	vk::ColorComponentFlagBits::eB |
+	vk::ColorComponentFlagBits::eA
+);
+
+const vk::PipelineColorBlendStateCreateInfo GraphicsPipelineDefaults::colorBlendState{ {}, false, vk::LogicOp::eCopy, 1, &colorBlendAttachment };
+const vk::PipelineDynamicStateCreateInfo GraphicsPipelineDefaults::dynamicState;
+
 
 void Renderer::init()
 {
@@ -35,8 +58,8 @@ void Renderer::loadScene(const Scene& scene)
 {
 	initPipelines();
 	initBuffers(scene.m_sprites);
+	initTextures();
 	initCommandBuffers(scene.m_sprites.size());
-	
 }
 
 void Renderer::loop()
@@ -52,6 +75,8 @@ void Renderer::loop()
 	}
 
 	m_device->waitIdle();
+
+	Shader::FreeShaders();
 	
 }
 
@@ -197,7 +222,7 @@ void Renderer::initDevice()
 		}
 	);
 
-	m_queueFamily = std::distance(queueFamilies.begin(), it);
+	m_queueFamily = static_cast<uint32_t>(std::distance(queueFamilies.begin(), it));
 
 	float priorities[] = { 1.0f }; // Ensure this is has as many numbers as queues.
 	std::vector<vk::DeviceQueueCreateInfo> queues{ vk::DeviceQueueCreateInfo{ {}, m_queueFamily, 1, priorities } };
@@ -207,7 +232,8 @@ void Renderer::initDevice()
 	};
 
 	vk::PhysicalDeviceFeatures features;
-	features.largePoints = true;
+	//features.largePoints = true;
+	features.samplerAnisotropy = true;
 
 	m_device = m_physicalDevice.createDeviceUnique(vk::DeviceCreateInfo{ {},
 		static_cast<uint32_t>(queues.size()),	  queues.data(),
@@ -400,7 +426,7 @@ void Renderer::initCommandPools()
 
 void Renderer::initPipelines()
 {
-	constexpr auto bindingLayout = create_vertex_input_layout(hana::make_tuple(
+	/*constexpr auto bindingLayout = create_vertex_input_layout(hana::make_tuple(
 		hana::make_pair(hana::type_c<Vertex>, hana::bool_c<false>),
 		hana::make_pair(hana::type_c<Sprite>, hana::bool_c<true>)
 	));
@@ -410,9 +436,48 @@ void Renderer::initPipelines()
 	dump_layout(bindingLayout);
 
 	pipeline.create({ "shaders/shader.vert.spv", "shaders/shader.frag.spv" });
+	*/
 
-	m_pipelines = UniqueVector<vk::Pipeline>{ std::vector<vk::Pipeline>(), *m_device };
-	m_pipelines->push_back(pipeline.m_pipeline.release());
+	m_pipeline.addShaderStage("shaders/shader.vert.spv");
+	m_pipeline.addShaderStage("shaders/shader.frag.spv");
+
+	vk::Viewport viewport{ 0.0f, 0.0f, (float)m_swapchainExtent.width, (float)m_swapchainExtent.height, 0.0f, 1.0f };
+	vk::Rect2D scissor{ {}, m_swapchainExtent };
+
+
+	std::vector<vk::VertexInputBindingDescription> bindings{
+		vk::VertexInputBindingDescription{ 0, sizeof(Vertex), vk::VertexInputRate::eVertex},
+		vk::VertexInputBindingDescription{ 1, sizeof(Sprite), vk::VertexInputRate::eInstance }
+	};
+	std::vector<vk::VertexInputAttributeDescription> attributes{
+		vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, 0 },
+		vk::VertexInputAttributeDescription{ 1, 1, vk::Format::eR32G32Sfloat, 0 },
+		vk::VertexInputAttributeDescription{ 2, 1, vk::Format::eR32G32Sfloat, 8 },
+		vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR32G32B32Sfloat, 16 }
+	};
+
+	m_pipeline.getVertexInputState()
+		.setVertexBindingDescriptionCount(bindings.size())
+		.setPVertexBindingDescriptions(bindings.data())
+		.setVertexAttributeDescriptionCount(attributes.size())
+		.setPVertexAttributeDescriptions(attributes.data());
+
+	m_pipeline.getInputAssemblyState()
+		.setTopology(vk::PrimitiveTopology::eTriangleStrip);
+
+	m_pipeline.getViewportState()
+		.setViewportCount(1)
+		.setPViewports(&viewport)
+		.setScissorCount(1)
+		.setPScissors(&scissor);
+
+	auto layer = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
+
+	m_pipeline.setLayout(*layer);
+
+	m_pipeline.setRenderPass(*m_renderPass, 0);
+
+	m_pipeline.create();
 }
 
 void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
@@ -456,6 +521,37 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
 	m_queue.waitIdle();
 }
 
+void Renderer::initTextures()
+{
+	m_textureImage = createImageUnique("texture.jpg");
+
+	m_textureImageView = m_device->createImageViewUnique(vk::ImageViewCreateInfo{
+		{},
+		m_textureImage->value,
+		vk::ImageViewType::e2D,
+		vk::Format::eR8G8B8A8Unorm,
+		vk::ComponentMapping{},
+		vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+	});
+
+	m_textureSampler = m_device->createSamplerUnique(vk::SamplerCreateInfo{
+		{},
+		vk::Filter::eLinear,
+		vk::Filter::eLinear,
+		vk::SamplerMipmapMode::eLinear,
+		vk::SamplerAddressMode::eClampToEdge,
+		vk::SamplerAddressMode::eClampToEdge,
+		vk::SamplerAddressMode::eClampToEdge,
+		0.0f,
+		true, 16,
+		false, vk::CompareOp::eAlways,
+		0.0f, 0.0f,
+		vk::BorderColor::eIntOpaqueBlack,
+		false
+	});
+
+}
+
 void Renderer::initCommandBuffers(size_t nInstances)
 {
 
@@ -481,11 +577,11 @@ void Renderer::initCommandBuffers(size_t nInstances)
 
 		if (nInstances > 0)
 		{
-			cb.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipelines->front());
+			m_pipeline.bind(cb);
 
 			cb.bindVertexBuffers(0, { m_vertexBuffer->value, m_instanceBuffer->value }, { 0, 0 });
 
-			cb.draw(4, nInstances, 0, 0);
+			cb.draw(4, static_cast<uint32_t>(nInstances), 0, 0);
 		}
 
 		cb.endRenderPass();
@@ -549,7 +645,137 @@ VmaAlloc<vk::Buffer> Renderer::createBuffer(vk::DeviceSize size, vk::BufferUsage
 	return alloc;
 }
 
-vk::UniqueHandle<VmaAlloc<vk::Buffer>> Renderer::createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage)
+UniqueVmaAlloc<vk::Buffer> Renderer::createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage)
 {
-	return vk::UniqueHandle<VmaAlloc<vk::Buffer>>( createBuffer(size, usage, memUsage), *m_allocator );
+	return UniqueVmaAlloc<vk::Buffer>( createBuffer(size, usage, memUsage), *m_allocator );
+}
+
+void transitionImageLayout(vk::CommandBuffer cb, vk::Image image, vk::Format imageFormat, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+{
+	vk::PipelineStageFlags srcStage, dstStage;
+	vk::AccessFlags srcAccess, dstAccess;
+	if (oldLayout == vk::ImageLayout::eUndefined)
+	{
+		srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+	}
+	else if(oldLayout == vk::ImageLayout::eTransferDstOptimal)
+	{
+		srcStage = vk::PipelineStageFlagBits::eTransfer;
+		srcAccess = vk::AccessFlagBits::eTransferWrite;
+	}
+
+	if (newLayout == vk::ImageLayout::eTransferDstOptimal)
+	{
+		dstStage = vk::PipelineStageFlagBits::eTransfer;
+		dstAccess = vk::AccessFlagBits::eTransferWrite;
+	}
+	else if (newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
+	{
+		dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+		dstAccess = vk::AccessFlagBits::eShaderRead;
+	}
+
+
+	cb.pipelineBarrier(
+		srcStage,
+		dstStage,
+		{},
+		{},
+		{},
+		{
+			vk::ImageMemoryBarrier{
+			srcAccess,
+			dstAccess,
+			oldLayout,
+			newLayout,
+			VK_QUEUE_FAMILY_IGNORED,
+			VK_QUEUE_FAMILY_IGNORED,
+			image,
+			vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+		}
+		}
+	);
+}
+
+VmaAlloc<vk::Image> Renderer::createImage(const std::string& path)
+{
+	UniqueVmaAlloc<vk::Buffer> stagingBuffer;
+	vk::DeviceSize imageSize;
+	uint32_t width, height;
+
+	{
+		int channels;
+		using unique_image = std::unique_ptr<stbi_uc, void(*)(void*)>;
+		unique_image pixels = unique_image{ stbi_load(path.c_str(), reinterpret_cast<int*>(&width), reinterpret_cast<int*>(&height), &channels, STBI_rgb_alpha), stbi_image_free };
+
+		imageSize = width * height * sizeof(uint32_t);
+
+		stagingBuffer = createBufferUnique(imageSize, vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
+		{
+			void* data;
+			vk::Result result{ vmaMapMemory(*m_allocator, stagingBuffer->allocation, &data) };
+			if (result != vk::Result::eSuccess)
+				vk::throwResultException(result, "vmaMapMemory");
+
+			memcpy(data, pixels.get(), imageSize);
+
+			vmaUnmapMemory(*m_allocator, stagingBuffer->allocation);
+		}
+	}
+
+	VmaAlloc<vk::Image> image;
+	{
+		vk::ImageCreateInfo createInfo{
+			{},
+			vk::ImageType::e2D,
+			vk::Format::eR8G8B8A8Unorm,
+			{width, height, 1},
+			1, 1,
+			vk::SampleCountFlagBits::e1,
+			vk::ImageTiling::eOptimal,
+			vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+			vk::SharingMode::eExclusive, 0, nullptr,
+			vk::ImageLayout::eUndefined
+		};
+
+		VmaAllocationCreateInfo allocInfo = {};
+		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+		vk::Result result{ vmaCreateImage(*m_allocator, reinterpret_cast<VkImageCreateInfo*>(&createInfo), &allocInfo, reinterpret_cast<VkImage*>(&image.value), &image.allocation, nullptr) };
+
+		if (result != vk::Result::eSuccess)
+			vk::throwResultException(result, "vmaCreateImage");
+	}
+
+	auto cb = std::move(m_device->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ *m_commandPool, vk::CommandBufferLevel::ePrimary, 1 })[0]);
+
+	cb->begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+	transitionImageLayout(*cb, image.value, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+
+	cb->copyBufferToImage(
+		stagingBuffer->value,
+		image.value,
+		vk::ImageLayout::eTransferDstOptimal,
+		{ 
+			vk::BufferImageCopy{0, 0, 0, vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {}, {width, height, 1} }
+		}
+	);
+
+	transitionImageLayout(*cb, image.value, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+	cb->end();
+
+	m_queue.submit({
+		vk::SubmitInfo{0, nullptr, nullptr, 1, &cb.get() }
+	}, nullptr);
+
+	m_queue.waitIdle();
+
+	return image;
+}
+
+UniqueVmaAlloc<vk::Image> Renderer::createImageUnique(const std::string & path)
+{
+	return UniqueVmaAlloc<vk::Image>(createImage(path), *m_allocator );
 }

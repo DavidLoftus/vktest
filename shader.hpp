@@ -9,23 +9,32 @@
 
 class Shader
 {
+	// Static Stuff
+public:
+
+	static const Shader& FetchShader(const std::string& path);
+	static void FreeShaders();
+
+
 private:
+
+	Shader(std::string path);
+
 	std::string m_path;
 	std::string m_code;
 	vk::ShaderModule m_handle;
 
-	std::string getCode();
-	vk::ShaderStageFlagBits getStage();
-	const char* findEntryPoint();
+	std::string getCode() const;
+	vk::ShaderStageFlagBits getStage() const;
+	const char* findEntryPoint() const;
 
 public:
 
-	Shader(std::string path);
+	~Shader();
 	Shader(const Shader&) = delete;
 	Shader(Shader&& other);
-	~Shader();
 
-	vk::PipelineShaderStageCreateInfo getStageInfo();
+	vk::PipelineShaderStageCreateInfo getStageInfo() const;
 
 };
 

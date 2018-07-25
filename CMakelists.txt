@@ -14,6 +14,7 @@ list(APPEND SOURCE_FILES main.cpp)
 list(APPEND SOURCE_FILES renderer.cpp)
 list(APPEND SOURCE_FILES scene.cpp)
 list(APPEND SOURCE_FILES shader.cpp)
+list(APPEND SOURCE_FILES pipeline.cpp)
 
 list(APPEND HEADER_FILES stdafx.h)
 list(APPEND HEADER_FILES renderer.hpp)

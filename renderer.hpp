@@ -6,6 +6,7 @@
 
 #include <vulkan/vulkan.hpp>
 #include <vk_mem_alloc.h>
+#include "pipeline.hpp"
 
 struct vkRenderCtx_t
 {
@@ -57,6 +58,9 @@ struct VmaAlloc
 	}
 
 };
+
+template<typename T>
+using UniqueVmaAlloc = vk::UniqueHandle<VmaAlloc<T>>;
 
 template<typename T>
 class UniqueVector :
@@ -161,6 +165,19 @@ public:
 
 };
 
+struct GraphicsPipelineDefaults
+{
+	static const vk::PipelineVertexInputStateCreateInfo vertexInputState;
+	static const vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState;
+	static const vk::PipelineTessellationStateCreateInfo tessellationState;
+	static const vk::PipelineViewportStateCreateInfo viewportState;
+	static const vk::PipelineRasterizationStateCreateInfo rasterizationState;
+	static const vk::PipelineMultisampleStateCreateInfo multisampleState;
+	static const vk::PipelineDepthStencilStateCreateInfo depthStencilState;
+	static const vk::PipelineColorBlendStateCreateInfo colorBlendState;
+	static const vk::PipelineDynamicStateCreateInfo dynamicState;
+};
+
 namespace std
 {
 	template<typename T>
@@ -198,6 +215,10 @@ namespace vk
 		void destroy(const VmaAlloc<vk::Buffer>& alloc)
 		{
 			vmaDestroyBuffer(m_allocator, static_cast<VkBuffer>(alloc.value), alloc.allocation);
+		}
+		void destroy(const VmaAlloc<vk::Image>& alloc)
+		{
+			vmaDestroyImage(m_allocator, static_cast<VkImage>(alloc.value), alloc.allocation);
 		}
 
 	private:
@@ -261,6 +282,7 @@ private:
 
 	void initPipelines();
 	void initBuffers(const std::vector<Sprite>& sceneSprites);
+	void initTextures();
 	void initCommandBuffers(size_t nInstances);
 
 #pragma endregion
@@ -275,7 +297,11 @@ private:
 #pragma region Utils
 
 	VmaAlloc<vk::Buffer> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
-	vk::UniqueHandle<VmaAlloc<vk::Buffer>> createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
+	UniqueVmaAlloc<vk::Buffer> createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
+
+	VmaAlloc<vk::Image> createImage(const std::string& path);
+	UniqueVmaAlloc<vk::Image> createImageUnique(const std::string& path);
+
 
 #pragma endregion
 
@@ -312,12 +338,16 @@ private:
 	UniqueVector<vk::Semaphore> m_renderFinishedSemaphores;
 	UniqueVector<vk::Fence> m_bufferFences;
 
-	UniqueVector<vk::Pipeline> m_pipelines;
+	Pipeline m_pipeline{ GraphicsPipelineDefaults() };
 
-	vk::UniqueHandle<VmaAlloc<vk::Buffer>> m_vertexBuffer;
-	vk::UniqueHandle<VmaAlloc<vk::Buffer>> m_instanceBuffer;
+	UniqueVmaAlloc<vk::Buffer> m_vertexBuffer;
+	UniqueVmaAlloc<vk::Buffer> m_instanceBuffer;
 
 	std::vector<vk::CommandBuffer> m_graphicsCommandBuffers;
+
+	UniqueVmaAlloc<vk::Image> m_textureImage;
+	vk::UniqueImageView m_textureImageView;
+	vk::UniqueSampler m_textureSampler;
 
 	size_t m_currentFrame = 0;
 

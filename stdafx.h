@@ -13,6 +13,9 @@
 #endif
 
 #include <iostream>
+#include <vector>
+#include <fstream>
+#include <algorithm>
 
 #include <boost/hana.hpp>
 
@@ -21,10 +24,6 @@
 
 #include <vk_mem_alloc.h>
 #include <termcolor.hpp>
-
-#include <iostream>
-#include <vector>
-#include <fstream>
-#include <algorithm>
+#include <stb_image.h>
 
 #endif
