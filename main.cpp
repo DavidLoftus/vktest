@@ -102,7 +102,7 @@ int main()
 	try {
 		renderer.init();
 
-		Scene myscene = Scene::Load("myscene.txt");
+		Scene myscene = Scene::Load("../myscene.txt");
 		renderer.loadScene(myscene);
 
 		renderer.loop();

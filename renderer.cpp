@@ -48,18 +48,23 @@ void Renderer::init()
 }
 
 const Vertex quad[] = {
-	glm::vec2(-1.0f, -1.0f),
-	glm::vec2( 1.0f, -1.0f),
-	glm::vec2(-1.0f,  1.0f),
-	glm::vec2( 1.0f,  1.0f)
+	{ glm::vec2(-1.0f, -1.0f), glm::vec2(0.0f, 0.0f) },
+	{ glm::vec2( 1.0f, -1.0f), glm::vec2(1.0f, 0.0f) },
+	{ glm::vec2(-1.0f,  1.0f), glm::vec2(0.0f, 1.0f) },
+	{ glm::vec2( 1.0f,  1.0f), glm::vec2(1.0f, 1.0f) }
 };
 
 void Renderer::loadScene(const Scene& scene)
 {
+	initPipelineLayout();
 	initPipelines();
+
 	initBuffers(scene.m_sprites);
 	initTextures();
+
+	initDescriptorSets();
 	initCommandBuffers(scene.m_sprites.size());
+
 }
 
 void Renderer::loop()
@@ -424,6 +429,28 @@ void Renderer::initCommandPools()
 
 }
 
+void Renderer::initPipelineLayout()
+{
+
+	std::vector<vk::DescriptorSetLayoutBinding> bindings{
+		vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}
+	};
+
+	std::vector<vk::DescriptorSetLayout> descriptorSetLayout{
+		m_device->createDescriptorSetLayout(
+			vk::DescriptorSetLayoutCreateInfo{
+				{},
+				static_cast<uint32_t>(bindings.size()),
+				bindings.data()
+			}
+		)
+	};
+
+	m_pipelineDescriptorSetLayouts = UniqueVector<vk::DescriptorSetLayout>( std::move(descriptorSetLayout), *m_device );
+
+	m_pipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, static_cast<uint32_t>(m_pipelineDescriptorSetLayouts->size()), m_pipelineDescriptorSetLayouts->data() });
+}
+
 void Renderer::initPipelines()
 {
 	/*constexpr auto bindingLayout = create_vertex_input_layout(hana::make_tuple(
@@ -451,9 +478,9 @@ void Renderer::initPipelines()
 	};
 	std::vector<vk::VertexInputAttributeDescription> attributes{
 		vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, 0 },
-		vk::VertexInputAttributeDescription{ 1, 1, vk::Format::eR32G32Sfloat, 0 },
-		vk::VertexInputAttributeDescription{ 2, 1, vk::Format::eR32G32Sfloat, 8 },
-		vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR32G32B32Sfloat, 16 }
+		vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32Sfloat, 8 },
+		vk::VertexInputAttributeDescription{ 2, 1, vk::Format::eR32G32Sfloat, 0 },
+		vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR32G32Sfloat, 8 }
 	};
 
 	m_pipeline.getVertexInputState()
@@ -471,13 +498,37 @@ void Renderer::initPipelines()
 		.setScissorCount(1)
 		.setPScissors(&scissor);
 
-	auto layer = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
-
-	m_pipeline.setLayout(*layer);
+	m_pipeline.setLayout(*m_pipelineLayout);
 
 	m_pipeline.setRenderPass(*m_renderPass, 0);
 
 	m_pipeline.create();
+}
+
+void Renderer::initDescriptorSets()
+{
+	vk::DescriptorPoolSize poolSize{ vk::DescriptorType::eCombinedImageSampler, 1 };
+	m_descriptorPool = m_device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{ {}, 1, 1, &poolSize });
+
+
+	m_textureSamplerDescriptorSet = std::move(m_device->allocateDescriptorSetsUnique(vk::DescriptorSetAllocateInfo{ *m_descriptorPool, 1, &m_pipelineDescriptorSetLayouts[0] })[0]);
+
+	vk::DescriptorImageInfo imageInfo{ *m_textureSampler, *m_textureImageView, vk::ImageLayout::eShaderReadOnlyOptimal };
+
+	m_device->updateDescriptorSets(
+		{ 
+			vk::WriteDescriptorSet{
+				*m_textureSamplerDescriptorSet,
+				0,
+				0,
+				1,
+				vk::DescriptorType::eCombinedImageSampler,
+			}.setPImageInfo(&imageInfo)
+		},
+		{
+		}
+	);
+
 }
 
 void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
@@ -574,11 +625,12 @@ void Renderer::initCommandBuffers(size_t nInstances)
 			},
 			vk::SubpassContents::eInline
 		);
-
+		
 		if (nInstances > 0)
 		{
 			m_pipeline.bind(cb);
 
+			cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_pipelineLayout, 0, { *m_textureSamplerDescriptorSet }, {});
 			cb.bindVertexBuffers(0, { m_vertexBuffer->value, m_instanceBuffer->value }, { 0, 0 });
 
 			cb.draw(4, static_cast<uint32_t>(nInstances), 0, 0);

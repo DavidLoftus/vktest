@@ -280,9 +280,11 @@ private:
 
 #pragma region SceneLoad
 
-	void initPipelines();
 	void initBuffers(const std::vector<Sprite>& sceneSprites);
 	void initTextures();
+	void initPipelineLayout();
+	void initPipelines();
+	void initDescriptorSets();
 	void initCommandBuffers(size_t nInstances);
 
 #pragma endregion
@@ -338,16 +340,22 @@ private:
 	UniqueVector<vk::Semaphore> m_renderFinishedSemaphores;
 	UniqueVector<vk::Fence> m_bufferFences;
 
+	UniqueVector<vk::DescriptorSetLayout> m_pipelineDescriptorSetLayouts;
+	vk::UniquePipelineLayout m_pipelineLayout;
 	Pipeline m_pipeline{ GraphicsPipelineDefaults() };
 
 	UniqueVmaAlloc<vk::Buffer> m_vertexBuffer;
 	UniqueVmaAlloc<vk::Buffer> m_instanceBuffer;
+
+	vk::UniqueDescriptorPool m_descriptorPool;
 
 	std::vector<vk::CommandBuffer> m_graphicsCommandBuffers;
 
 	UniqueVmaAlloc<vk::Image> m_textureImage;
 	vk::UniqueImageView m_textureImageView;
 	vk::UniqueSampler m_textureSampler;
+
+	vk::UniqueDescriptorSet m_textureSamplerDescriptorSet;
 
 	size_t m_currentFrame = 0;
 

@@ -11,7 +11,7 @@ Scene Scene::Load(const std::string & path)
 	while (inFile)
 	{
 		Sprite sprite;
-		inFile >> sprite.pos.x >> sprite.pos.y >> sprite.scale.x >> sprite.scale.y >> sprite.color.r >> sprite.color.g >> sprite.color.b;
+		inFile >> sprite.pos.x >> sprite.pos.y >> sprite.scale.x >> sprite.scale.y;
 		inFile.ignore();
 
 		sprites.push_back(sprite);

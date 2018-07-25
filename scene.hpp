@@ -9,17 +9,17 @@
 struct Vertex
 {
 	glm::vec2 vpos;
+	glm::vec2 tpos;
 };
 
 struct Sprite
 {
 	glm::vec2 pos;
 	glm::vec2 scale;
-	glm::vec3 color;
 };
 
-BOOST_HANA_ADAPT_STRUCT(Sprite, pos, scale, color);
-BOOST_HANA_ADAPT_STRUCT(Vertex, vpos);
+BOOST_HANA_ADAPT_STRUCT(Sprite, pos, scale);
+BOOST_HANA_ADAPT_STRUCT(Vertex, vpos, tpos);
 
 class Scene
 {
