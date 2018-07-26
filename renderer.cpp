@@ -833,6 +833,8 @@ VmaAlloc<vk::Image> Renderer::createImage(const std::string& path)
 		using unique_image = std::unique_ptr<stbi_uc, void(*)(void*)>;
 		unique_image pixels = unique_image{ stbi_load(path.c_str(), reinterpret_cast<int*>(&width), reinterpret_cast<int*>(&height), &channels, STBI_rgb_alpha), stbi_image_free };
 
+		if(!pixels) throw std::runtime_error("Image file not found. Path = " + path);
+		
 		imageSize = width * height * sizeof(uint32_t);
 
 		stagingBuffer = createBufferUnique(imageSize, vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);

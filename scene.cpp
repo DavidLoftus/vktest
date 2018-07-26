@@ -7,6 +7,8 @@ Scene Scene::Load(const std::string & path)
 	Scene scene;
 
 	std::ifstream inFile(path);
+	
+	if(!inFile) throw std::runtime_error("Scene file not found. Path = " + path);
 
 	while (true)
 	{
