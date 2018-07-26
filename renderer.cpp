@@ -2,7 +2,7 @@
 #include "renderer.hpp"
 #include <stdlib.h>
 #include <stb_image.h>
-#include <boost/hana.hpp>
+#include <numeric>
 #include "shader.hpp"
 
 namespace hana = boost::hana;
@@ -47,7 +47,19 @@ void Renderer::init()
 	initCoreRenderer();
 }
 
-const Vertex quad[] = {
+struct vertex_data
+{
+	glm::vec2 vpos;
+	glm::vec2 tpos;
+};
+
+struct instance_data
+{
+	glm::vec2 pos;
+	glm::vec2 scale;
+};
+
+const vertex_data quad[] = {
 	{ glm::vec2(-1.0f, -1.0f), glm::vec2(0.0f, 0.0f) },
 	{ glm::vec2( 1.0f, -1.0f), glm::vec2(1.0f, 0.0f) },
 	{ glm::vec2(-1.0f,  1.0f), glm::vec2(0.0f, 1.0f) },
@@ -56,14 +68,18 @@ const Vertex quad[] = {
 
 void Renderer::loadScene(const Scene& scene)
 {
+
+	std::vector<Sprite> sorted_sprites = scene.sprites();
+	std::sort(sorted_sprites.begin(), sorted_sprites.end(), [](const Sprite& a, const Sprite& b) { return a.textureId < b.textureId; });
+
 	initPipelineLayout();
 	initPipelines();
 
-	initBuffers(scene.m_sprites);
-	initTextures();
+	initBuffers(sorted_sprites);
+	initTextures(scene.textures());
 
 	initDescriptorSets();
-	initCommandBuffers(scene.m_sprites.size());
+	initCommandBuffers(sorted_sprites);
 
 }
 
@@ -454,8 +470,8 @@ void Renderer::initPipelineLayout()
 void Renderer::initPipelines()
 {
 	/*constexpr auto bindingLayout = create_vertex_input_layout(hana::make_tuple(
-		hana::make_pair(hana::type_c<Vertex>, hana::bool_c<false>),
-		hana::make_pair(hana::type_c<Sprite>, hana::bool_c<true>)
+		hana::make_pair(hana::type_c<vertex_data>, hana::bool_c<false>),
+		hana::make_pair(hana::type_c<instance_data>, hana::bool_c<true>)
 	));
 
 	auto pipeline = make_graphics_pipeline(bindingLayout, ENUM_CONSTANT(vk::PrimitiveTopology, eTriangleStrip), ENUM_CONSTANT(vk::PolygonMode, eFill));
@@ -473,8 +489,8 @@ void Renderer::initPipelines()
 
 
 	std::vector<vk::VertexInputBindingDescription> bindings{
-		vk::VertexInputBindingDescription{ 0, sizeof(Vertex), vk::VertexInputRate::eVertex},
-		vk::VertexInputBindingDescription{ 1, sizeof(Sprite), vk::VertexInputRate::eInstance }
+		vk::VertexInputBindingDescription{ 0, sizeof(vertex_data), vk::VertexInputRate::eVertex},
+		vk::VertexInputBindingDescription{ 1, sizeof(instance_data), vk::VertexInputRate::eInstance }
 	};
 	std::vector<vk::VertexInputAttributeDescription> attributes{
 		vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, 0 },
@@ -507,52 +523,74 @@ void Renderer::initPipelines()
 
 void Renderer::initDescriptorSets()
 {
-	vk::DescriptorPoolSize poolSize{ vk::DescriptorType::eCombinedImageSampler, 1 };
-	m_descriptorPool = m_device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{ {}, 1, 1, &poolSize });
+	std::vector<vk::DescriptorPoolSize> poolSizes{
+		vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, static_cast<uint32_t>(m_textureImages->size()) }
+	};
 
+	uint32_t maxSize = std::accumulate(
+		poolSizes.begin(),
+		poolSizes.end(),
+		0u,
+		[](uint32_t sum, const vk::DescriptorPoolSize& poolSize) { return sum + poolSize.descriptorCount; }
+	);
 
-	m_textureSamplerDescriptorSet = std::move(m_device->allocateDescriptorSetsUnique(vk::DescriptorSetAllocateInfo{ *m_descriptorPool, 1, &m_pipelineDescriptorSetLayouts[0] })[0]);
+	m_descriptorPool = m_device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{ {}, maxSize, static_cast<uint32_t>(poolSizes.size()), poolSizes.data() });
 
-	vk::DescriptorImageInfo imageInfo{ *m_textureSampler, *m_textureImageView, vk::ImageLayout::eShaderReadOnlyOptimal };
+	std::vector<vk::DescriptorSetLayout> layouts( m_textureImages->size(), m_pipelineDescriptorSetLayouts[0] );
+	
+	m_textureSamplerDescriptorSets = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{
+		*m_descriptorPool,
+		static_cast<uint32_t>(m_textureImages->size()),
+		layouts.data()
+	});
+	
+	std::vector<vk::DescriptorImageInfo> imageInfos;
+	imageInfos.reserve(m_textureImages->size());
 
-	m_device->updateDescriptorSets(
-		{ 
+	for(auto imageView : *m_textureImageViews)
+		imageInfos.emplace_back( *m_textureSampler, imageView, vk::ImageLayout::eShaderReadOnlyOptimal );
+
+	std::vector<vk::WriteDescriptorSet> writeInfos;
+	writeInfos.reserve(m_textureImages->size());
+	for (size_t i = 0; i < m_textureImages->size(); ++i)
+	{
+		writeInfos.push_back(
 			vk::WriteDescriptorSet{
-				*m_textureSamplerDescriptorSet,
+				m_textureSamplerDescriptorSets[i],
 				0,
 				0,
 				1,
 				vk::DescriptorType::eCombinedImageSampler,
-			}.setPImageInfo(&imageInfo)
-		},
-		{
-		}
-	);
+			}.setPImageInfo(&imageInfos[i])
+		);
+	}
+
+	m_device->updateDescriptorSets( writeInfos, {} );
 
 }
 
 void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
 {
 
-	m_vertexBuffer = createBufferUnique(4 * sizeof(Vertex), vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, VMA_MEMORY_USAGE_GPU_ONLY);
-	m_instanceBuffer = createBufferUnique(4 * sizeof(Vertex), vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	m_vertexBuffer = createBufferUnique(4 * sizeof(vertex_data), vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, VMA_MEMORY_USAGE_GPU_ONLY);
+	m_instanceBuffer = createBufferUnique(sceneSprites.size() * sizeof(instance_data), vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
 
 	// Staging Buffer
-	auto vertexStagingBuffer = createBufferUnique(4 * sizeof(Vertex), vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
+	auto vertexStagingBuffer = createBufferUnique(4 * sizeof(vertex_data), vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
 	{
 		void* data;
 		vk::Result result = vk::Result(vmaMapMemory(*m_allocator, vertexStagingBuffer->allocation, &data));
 		if (result != vk::Result::eSuccess)
 			vk::throwResultException(result, "vmaMapMemory");
 
-		memcpy(data, quad, sizeof(Vertex) * 4);
+		memcpy(data, quad, sizeof(vertex_data) * 4);
 		vmaUnmapMemory(*m_allocator, vertexStagingBuffer->allocation);
 	}
 
 	auto cb = std::move(m_device->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ *m_commandPool, vk::CommandBufferLevel::ePrimary, 1 })[0]);
 
 	cb->begin(vk::CommandBufferBeginInfo{ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
-	cb->copyBuffer(vertexStagingBuffer->value, m_vertexBuffer->value, { vk::BufferCopy{ 0, 0, sizeof(Vertex) * 4 } });
+	cb->copyBuffer(vertexStagingBuffer->value, m_vertexBuffer->value, { vk::BufferCopy{ 0, 0, sizeof(vertex_data) * 4 } });
 	cb->end();
 
 	m_queue.submit({ vk::SubmitInfo{ 0, nullptr, nullptr, 1, &cb.get() } }, nullptr);
@@ -564,7 +602,10 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
 		if (result != vk::Result::eSuccess)
 			vk::throwResultException(result, "vmaMapMemory");
 
-		memcpy(data, sceneSprites.data(), sizeof(Sprite) * sceneSprites.size());
+		instance_data* instData = reinterpret_cast<instance_data*>(data);
+		for (auto& sprite : sceneSprites)
+			*instData++ = { sprite.pos, sprite.scale };
+		
 		vmaUnmapMemory(*m_allocator, m_instanceBuffer->allocation);
 	}
 
@@ -572,18 +613,32 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
 	m_queue.waitIdle();
 }
 
-void Renderer::initTextures()
+void Renderer::initTextures(const std::vector<std::string>& textures)
 {
-	m_textureImage = createImageUnique("texture.jpg");
+	{
+		std::vector<VmaAlloc<vk::Image>> images;
+		std::vector<vk::ImageView> imageViews;
 
-	m_textureImageView = m_device->createImageViewUnique(vk::ImageViewCreateInfo{
-		{},
-		m_textureImage->value,
-		vk::ImageViewType::e2D,
-		vk::Format::eR8G8B8A8Unorm,
-		vk::ComponentMapping{},
-		vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
-	});
+		images.reserve(textures.size());
+		imageViews.reserve(textures.size());
+
+		for (auto& path : textures)
+		{
+			images.push_back(createImage(path));
+			imageViews.push_back(m_device->createImageView(vk::ImageViewCreateInfo{
+				{},
+				images.back().value,
+				vk::ImageViewType::e2D,
+				vk::Format::eR8G8B8A8Unorm,
+				vk::ComponentMapping{},
+				vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+				}));
+		}
+
+		m_textureImages = UniqueVector<VmaAlloc<vk::Image>>( std::move(images), *m_allocator );
+		m_textureImageViews = UniqueVector<vk::ImageView>(std::move(imageViews), *m_device);
+	}
+	
 
 	m_textureSampler = m_device->createSamplerUnique(vk::SamplerCreateInfo{
 		{},
@@ -603,7 +658,7 @@ void Renderer::initTextures()
 
 }
 
-void Renderer::initCommandBuffers(size_t nInstances)
+void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites)
 {
 
 	m_graphicsCommandBuffers = m_device->allocateCommandBuffers(vk::CommandBufferAllocateInfo{ *m_commandPool, vk::CommandBufferLevel::ePrimary, static_cast<uint32_t>(m_swapchainFramebuffers->size()) });
@@ -625,21 +680,39 @@ void Renderer::initCommandBuffers(size_t nInstances)
 			},
 			vk::SubpassContents::eInline
 		);
+
+	}
 		
-		if (nInstances > 0)
+	if (!sprites.empty())
+	{
+		for (auto cb : m_graphicsCommandBuffers)
 		{
 			m_pipeline.bind(cb);
-
-			cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_pipelineLayout, 0, { *m_textureSamplerDescriptorSet }, {});
 			cb.bindVertexBuffers(0, { m_vertexBuffer->value, m_instanceBuffer->value }, { 0, 0 });
-
-			cb.draw(4, static_cast<uint32_t>(nInstances), 0, 0);
 		}
 
+		auto searchIt = sprites.begin();
+
+		while (searchIt != sprites.end())
+		{
+			uint32_t id = searchIt->textureId;
+
+			auto endIt = std::find_if_not(searchIt, sprites.end(), [id](const Sprite& sp) { return sp.textureId == id; });
+
+			for (auto cb : m_graphicsCommandBuffers)
+			{
+				cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_pipelineLayout, 0, { m_textureSamplerDescriptorSets[id] }, {});
+				cb.draw(4, static_cast<uint32_t>(std::distance(searchIt, endIt)), 0, static_cast<uint32_t>(std::distance(sprites.begin(), searchIt)));
+			}
+
+			searchIt = endIt;
+		}
+	}
+
+	for (auto cb : m_graphicsCommandBuffers)
+	{
 		cb.endRenderPass();
-
 		cb.end();
-
 	}
 
 }

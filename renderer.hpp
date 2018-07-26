@@ -281,11 +281,11 @@ private:
 #pragma region SceneLoad
 
 	void initBuffers(const std::vector<Sprite>& sceneSprites);
-	void initTextures();
+	void initTextures(const std::vector<std::string>& textures);
 	void initPipelineLayout();
 	void initPipelines();
 	void initDescriptorSets();
-	void initCommandBuffers(size_t nInstances);
+	void initCommandBuffers(const std::vector<Sprite>& sprites);
 
 #pragma endregion
 
@@ -351,11 +351,11 @@ private:
 
 	std::vector<vk::CommandBuffer> m_graphicsCommandBuffers;
 
-	UniqueVmaAlloc<vk::Image> m_textureImage;
-	vk::UniqueImageView m_textureImageView;
+	UniqueVector<VmaAlloc<vk::Image>> m_textureImages;
+	UniqueVector<vk::ImageView> m_textureImageViews;
 	vk::UniqueSampler m_textureSampler;
 
-	vk::UniqueDescriptorSet m_textureSamplerDescriptorSet;
+	std::vector<vk::DescriptorSet> m_textureSamplerDescriptorSets;
 
 	size_t m_currentFrame = 0;
 
