@@ -13,9 +13,8 @@
 #include <GLFW/glfw3.h>
 #include <termcolor.hpp>
 
-#include "shader.hpp"
-#include "renderer.hpp"
-#include "scene.hpp"
+#include "renderer.h"
+#include "scene.h"
 
 std::ostream& operator<<(std::ostream& os, vk::DebugReportFlagsEXT flags)
 {
@@ -78,22 +77,6 @@ VkBool32 callback_fn(
 
 	return false;
 }
-
-struct vertex_data
-{
-	BOOST_HANA_DEFINE_STRUCT(vertex_data,
-		(glm::vec2, pos)
-	);
-
-};
-
-struct instance_data
-{
-	BOOST_HANA_DEFINE_STRUCT(instance_data,
-		(glm::vec2, pos),
-		(glm::vec3, colour)
-	);
-};
 
 int main()
 {

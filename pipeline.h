@@ -1,8 +1,8 @@
 #ifdef _MSC_VER
 #	pragma once
 #endif
-#ifndef PIPELINE_HPP
-#define PIPELINE_HPP
+#ifndef PIPELINE_H
+#define PIPELINE_H
 
 #include <vulkan/vulkan.hpp>
 

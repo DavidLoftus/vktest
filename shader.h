@@ -1,8 +1,8 @@
 #ifdef _MSC_VER
 #	pragma once
 #endif
-#ifndef SHADER_HPP
-#define SHADER_HPP
+#ifndef SHADER_H
+#define SHADER_H
 
 #include <vulkan/vulkan.hpp>
 #include <string>
@@ -36,6 +36,14 @@ public:
 
 	vk::PipelineShaderStageCreateInfo getStageInfo() const;
 
+};
+
+struct ShaderFree
+{
+	~ShaderFree()
+	{
+		Shader::FreeShaders();
+	}
 };
 
 #endif

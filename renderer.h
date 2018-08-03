@@ -1,12 +1,12 @@
 #ifdef _MSC_VER
 #	pragma once
 #endif
-#ifndef RENDERER_HPP
-#define RENDERER_HPP
+#ifndef RENDERER_H
+#define RENDERER_H
 
 #include <vulkan/vulkan.hpp>
 #include <vk_mem_alloc.h>
-#include "pipeline.hpp"
+#include "pipeline.h"
 
 struct vkRenderCtx_t
 {
@@ -17,6 +17,8 @@ struct vkRenderCtx_t
 
 	vk::Device device;
 
+	VmaAllocator allocator;
+
 	uint32_t queueFamily;
 	vk::Queue queue;
 
@@ -24,6 +26,8 @@ struct vkRenderCtx_t
 	vk::Extent2D swapchainExtent;
 
 	vk::RenderPass renderPass;
+
+	vk::CommandPool commandPool;
 };
 
 extern vkRenderCtx_t vkRenderCtx;
@@ -241,7 +245,9 @@ namespace vk
 
 const uint32_t WIDTH = 800, HEIGHT = 600;
 
-#include "scene.hpp"
+#include "scene.h"
+#include "mesh.h"
+#include "shader.h"
 
 class Renderer
 {
@@ -252,6 +258,79 @@ public:
 	void loadScene(const Scene& scene);
 
 	void loop();
+
+#pragma region Utils
+
+	static VmaAlloc<vk::Buffer> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
+	static UniqueVmaAlloc<vk::Buffer> createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
+
+	static void copyBuffer(VmaAlloc<vk::Buffer> src, VmaAlloc<vk::Buffer> dst);
+
+	template<typename Vertex>
+	static VmaAlloc<vk::Buffer> createVertexBuffer( const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output )
+	{
+		size_t totalVertices = std::accumulate(
+			meshes.begin(),
+			meshes.end(),
+			0ull,
+			[](size_t n, const std::vector<Vertex>& data) {return n + data.size(); }
+		);
+
+		if (totalVertices == 0)
+		{
+			return Renderer::createBuffer(
+				1,
+				vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+				VMA_MEMORY_USAGE_GPU_ONLY
+			);
+		}
+
+		VmaAlloc<vk::Buffer> buffer = Renderer::createBuffer(
+			totalVertices * sizeof(Vertex),
+			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+			VMA_MEMORY_USAGE_GPU_ONLY
+		);
+
+		UniqueVmaAlloc<vk::Buffer> stagingBuffer = Renderer::createBufferUnique(
+			totalVertices * sizeof(Vertex),
+			vk::BufferUsageFlagBits::eTransferSrc,
+			VMA_MEMORY_USAGE_CPU_ONLY
+		);
+
+		Vertex* data;
+		vmaMapMemory(vkRenderCtx.allocator, stagingBuffer->allocation, reinterpret_cast<void**>(&data));
+
+		uint32_t firstVertex = 0;
+		for (auto& vertices : meshes)
+		{
+			uint32_t nVertices = static_cast<uint32_t>(vertices.size());
+			memcpy(data + firstVertex, vertices.data(), nVertices * sizeof(Vertex));
+
+			output.emplace_back(firstVertex, nVertices);
+
+			firstVertex += nVertices;
+		}
+
+		vmaUnmapMemory(vkRenderCtx.allocator, stagingBuffer->allocation);
+
+		Renderer::copyBuffer(*stagingBuffer, buffer);
+
+		return buffer;
+	}
+
+	template<typename Vertex>
+	static UniqueVmaAlloc<vk::Buffer> createVertexBufferUnique(const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output)
+	{
+		return UniqueVmaAlloc<vk::Buffer>{ createVertexBuffer(meshes, output), vkRenderCtx.allocator };
+	}
+
+	static VmaAlloc<vk::Image> createImage(const std::string& path);
+	static UniqueVmaAlloc<vk::Image> createImageUnique(const std::string& path);
+
+
+#pragma endregion
+
+
 
 private:
 
@@ -280,12 +359,12 @@ private:
 
 #pragma region SceneLoad
 
-	void initBuffers(const std::vector<Sprite>& sceneSprites);
+	void initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& meshes);
 	void initTextures(const std::vector<std::string>& textures);
 	void initPipelineLayout();
 	void initPipelines();
 	void initDescriptorSets();
-	void initCommandBuffers(const std::vector<Sprite>& sprites);
+	void initCommandBuffers(const std::vector<Sprite>& sprites, const std::vector<Object>& objects);
 
 #pragma endregion
 
@@ -293,17 +372,6 @@ private:
 
 	void updateBuffers();
 	void renderFrame();
-
-#pragma endregion
-
-#pragma region Utils
-
-	VmaAlloc<vk::Buffer> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
-	UniqueVmaAlloc<vk::Buffer> createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage);
-
-	VmaAlloc<vk::Image> createImage(const std::string& path);
-	UniqueVmaAlloc<vk::Image> createImageUnique(const std::string& path);
-
 
 #pragma endregion
 
@@ -340,11 +408,17 @@ private:
 	UniqueVector<vk::Semaphore> m_renderFinishedSemaphores;
 	UniqueVector<vk::Fence> m_bufferFences;
 
-	UniqueVector<vk::DescriptorSetLayout> m_pipelineDescriptorSetLayouts;
-	vk::UniquePipelineLayout m_pipelineLayout;
-	Pipeline m_pipeline{ GraphicsPipelineDefaults() };
+	ShaderFree _sf;
 
-	UniqueVmaAlloc<vk::Buffer> m_vertexBuffer;
+	UniqueVector<vk::DescriptorSetLayout> m_texturePipelineDescriptorSetLayouts;
+	vk::UniquePipelineLayout m_texturePipelineLayout;
+	Pipeline m_texturePipeline{ GraphicsPipelineDefaults() };
+
+	//UniqueVector<vk::DescriptorSetLayout> m_worldPipelineDescriptorSetLayouts;
+	vk::UniquePipelineLayout m_worldPipelineLayout;
+	Pipeline m_worldPipeline{ GraphicsPipelineDefaults() };
+
+	UniqueVmaAlloc<vk::Buffer> m_quadVertexBuffer;
 	UniqueVmaAlloc<vk::Buffer> m_instanceBuffer;
 
 	vk::UniqueDescriptorPool m_descriptorPool;
@@ -354,6 +428,11 @@ private:
 	UniqueVector<VmaAlloc<vk::Image>> m_textureImages;
 	UniqueVector<vk::ImageView> m_textureImageViews;
 	vk::UniqueSampler m_textureSampler;
+
+	UniqueVmaAlloc<vk::Buffer> m_meshVertexBuffer;
+	std::vector<std::pair<uint32_t,uint32_t>> m_meshLocations;
+
+
 
 	std::vector<vk::DescriptorSet> m_textureSamplerDescriptorSets;
 

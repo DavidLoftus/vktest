@@ -1,9 +1,9 @@
 #include "stdafx.h"
-#include "renderer.hpp"
+#include "renderer.h"
 #include <stdlib.h>
 #include <stb_image.h>
 #include <numeric>
-#include "shader.hpp"
+#include "shader.h"
 
 namespace hana = boost::hana;
 
@@ -47,19 +47,7 @@ void Renderer::init()
 	initCoreRenderer();
 }
 
-struct vertex_data
-{
-	glm::vec2 vpos;
-	glm::vec2 tpos;
-};
-
-struct instance_data
-{
-	glm::vec2 pos;
-	glm::vec2 scale;
-};
-
-const vertex_data quad[] = {
+const std::vector<sprite_vertex> quad = {
 	{ glm::vec2(-1.0f, -1.0f), glm::vec2(0.0f, 0.0f) },
 	{ glm::vec2( 1.0f, -1.0f), glm::vec2(1.0f, 0.0f) },
 	{ glm::vec2(-1.0f,  1.0f), glm::vec2(0.0f, 1.0f) },
@@ -75,11 +63,11 @@ void Renderer::loadScene(const Scene& scene)
 	initPipelineLayout();
 	initPipelines();
 
-	initBuffers(sorted_sprites);
+	initBuffers(sorted_sprites, scene.objFiles());
 	initTextures(scene.textures());
 
 	initDescriptorSets();
-	initCommandBuffers(sorted_sprites);
+	initCommandBuffers(sorted_sprites, scene.objects());
 
 }
 
@@ -100,6 +88,192 @@ void Renderer::loop()
 	Shader::FreeShaders();
 	
 }
+
+
+VmaAlloc<vk::Buffer> Renderer::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage)
+{
+	VmaAlloc<vk::Buffer> alloc;
+
+	vk::BufferCreateInfo createInfo{
+		{}, size, usage, vk::SharingMode::eExclusive // For now we only have 1 queue.
+	};
+
+	VmaAllocationCreateInfo allocInfo = {};
+	allocInfo.usage = memUsage;
+
+	vmaCreateBuffer(vkRenderCtx.allocator, reinterpret_cast<VkBufferCreateInfo*>(&createInfo), &allocInfo, reinterpret_cast<VkBuffer*>(&alloc.value), &alloc.allocation, nullptr);
+
+	return alloc;
+}
+
+UniqueVmaAlloc<vk::Buffer> Renderer::createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage)
+{
+	return UniqueVmaAlloc<vk::Buffer>(createBuffer(size, usage, memUsage), vkRenderCtx.allocator);
+}
+
+void Renderer::copyBuffer(VmaAlloc<vk::Buffer> src, VmaAlloc<vk::Buffer> dst)
+{
+	VmaAllocationInfo srcAllocInfo, dstAllocInfo;
+	vmaGetAllocationInfo(vkRenderCtx.allocator, src.allocation, &srcAllocInfo);
+	vmaGetAllocationInfo(vkRenderCtx.allocator, dst.allocation, &dstAllocInfo);
+
+	size_t sz = std::min(srcAllocInfo.size, dstAllocInfo.size);
+
+	auto cb = std::move(vkRenderCtx.device.allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ vkRenderCtx.commandPool, vk::CommandBufferLevel::ePrimary, 1 }).front());
+
+	cb->begin(vk::CommandBufferBeginInfo{});
+
+	cb->copyBuffer(src.value, dst.value, { vk::BufferCopy{ 0, 0, sz } });
+
+	cb->end();
+
+	auto fence = vkRenderCtx.device.createFenceUnique(vk::FenceCreateInfo{});
+
+	vkRenderCtx.queue.submit(
+		{
+			vk::SubmitInfo{
+			0, nullptr, nullptr,
+			1, &cb.get()
+		}
+		},
+		*fence
+	);
+
+	vkRenderCtx.device.waitForFences({ *fence }, true, std::numeric_limits<uint64_t>::max());
+}
+
+void transitionImageLayout(vk::CommandBuffer cb, vk::Image image, vk::Format imageFormat, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+{
+	vk::PipelineStageFlags srcStage, dstStage;
+	vk::AccessFlags srcAccess, dstAccess;
+	if (oldLayout == vk::ImageLayout::eUndefined)
+	{
+		srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+	}
+	else if (oldLayout == vk::ImageLayout::eTransferDstOptimal)
+	{
+		srcStage = vk::PipelineStageFlagBits::eTransfer;
+		srcAccess = vk::AccessFlagBits::eTransferWrite;
+	}
+
+	if (newLayout == vk::ImageLayout::eTransferDstOptimal)
+	{
+		dstStage = vk::PipelineStageFlagBits::eTransfer;
+		dstAccess = vk::AccessFlagBits::eTransferWrite;
+	}
+	else if (newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
+	{
+		dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+		dstAccess = vk::AccessFlagBits::eShaderRead;
+	}
+
+
+	cb.pipelineBarrier(
+		srcStage,
+		dstStage,
+		{},
+		{},
+		{},
+		{
+			vk::ImageMemoryBarrier{
+				srcAccess,
+				dstAccess,
+				oldLayout,
+				newLayout,
+				VK_QUEUE_FAMILY_IGNORED,
+				VK_QUEUE_FAMILY_IGNORED,
+				image,
+				vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+			}
+		}
+	);
+}
+
+VmaAlloc<vk::Image> Renderer::createImage(const std::string& path)
+{
+	UniqueVmaAlloc<vk::Buffer> stagingBuffer;
+	vk::DeviceSize imageSize;
+	uint32_t width, height;
+
+	{
+		int channels;
+		using unique_image = std::unique_ptr<stbi_uc, void(*)(void*)>;
+		unique_image pixels = unique_image{ stbi_load(path.c_str(), reinterpret_cast<int*>(&width), reinterpret_cast<int*>(&height), &channels, STBI_rgb_alpha), stbi_image_free };
+
+		if (!pixels) throw std::runtime_error("Image file not found. Path = " + path);
+
+		imageSize = width * height * sizeof(uint32_t);
+
+		stagingBuffer = createBufferUnique(imageSize, vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
+		{
+			void* data;
+			vk::Result result{ vmaMapMemory(vkRenderCtx.allocator, stagingBuffer->allocation, &data) };
+			if (result != vk::Result::eSuccess)
+				vk::throwResultException(result, "vmaMapMemory");
+
+			memcpy(data, pixels.get(), imageSize);
+
+			vmaUnmapMemory(vkRenderCtx.allocator, stagingBuffer->allocation);
+		}
+	}
+
+	VmaAlloc<vk::Image> image;
+	{
+		vk::ImageCreateInfo createInfo{
+			{},
+			vk::ImageType::e2D,
+			vk::Format::eR8G8B8A8Unorm,
+		{ width, height, 1 },
+		1, 1,
+		vk::SampleCountFlagBits::e1,
+		vk::ImageTiling::eOptimal,
+		vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+		vk::SharingMode::eExclusive, 0, nullptr,
+		vk::ImageLayout::eUndefined
+		};
+
+		VmaAllocationCreateInfo allocInfo = {};
+		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+		vk::Result result{ vmaCreateImage(vkRenderCtx.allocator, reinterpret_cast<VkImageCreateInfo*>(&createInfo), &allocInfo, reinterpret_cast<VkImage*>(&image.value), &image.allocation, nullptr) };
+
+		if (result != vk::Result::eSuccess)
+			vk::throwResultException(result, "vmaCreateImage");
+	}
+
+	auto cb = std::move(vkRenderCtx.device.allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ vkRenderCtx.commandPool, vk::CommandBufferLevel::ePrimary, 1 })[0]);
+
+	cb->begin(vk::CommandBufferBeginInfo{ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+
+	transitionImageLayout(*cb, image.value, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+
+	cb->copyBufferToImage(
+		stagingBuffer->value,
+		image.value,
+		vk::ImageLayout::eTransferDstOptimal,
+		{
+			vk::BufferImageCopy{ 0, 0, 0, vk::ImageSubresourceLayers{ vk::ImageAspectFlagBits::eColor, 0, 0, 1 },{},{ width, height, 1 } }
+		}
+	);
+
+	transitionImageLayout(*cb, image.value, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+	cb->end();
+
+	vkRenderCtx.queue.submit({
+		vk::SubmitInfo{ 0, nullptr, nullptr, 1, &cb.get() }
+		}, nullptr);
+
+	vkRenderCtx.queue.waitIdle();
+
+	return image;
+}
+
+UniqueVmaAlloc<vk::Image> Renderer::createImageUnique(const std::string & path)
+{
+	return UniqueVmaAlloc<vk::Image>(createImage(path), vkRenderCtx.allocator);
+}
+
 
 void Renderer::initWindow()
 {
@@ -132,6 +306,7 @@ void Renderer::initCoreRenderer()
 	vkRenderCtx.queue = m_queue;
 
 	initAllocator();
+	vkRenderCtx.allocator = m_allocator.get();
 
 	initSwapchain();
 	vkRenderCtx.swapchainFormat = m_swapchainFormat;
@@ -145,6 +320,7 @@ void Renderer::initCoreRenderer()
 	initFrameBuffers();
 
 	initCommandPools();
+	vkRenderCtx.commandPool = *m_commandPool;
 
 }
 
@@ -204,10 +380,9 @@ void Renderer::initDebugReportCallback()
 	m_debugReportCallback = m_instance->createDebugReportCallbackEXTUnique(
 		vk::DebugReportCallbackCreateInfoEXT{
 			vk::DebugReportFlagBitsEXT::eDebug
-			| vk::DebugReportFlagBitsEXT::eError
-		| vk::DebugReportFlagBitsEXT::eInformation
-		| vk::DebugReportFlagBitsEXT::ePerformanceWarning
-		| vk::DebugReportFlagBitsEXT::eWarning,
+		  | vk::DebugReportFlagBitsEXT::eError
+		  | vk::DebugReportFlagBitsEXT::ePerformanceWarning
+		  | vk::DebugReportFlagBitsEXT::eWarning,
 		callback_fn,
 		nullptr
 		}
@@ -462,63 +637,85 @@ void Renderer::initPipelineLayout()
 		)
 	};
 
-	m_pipelineDescriptorSetLayouts = UniqueVector<vk::DescriptorSetLayout>( std::move(descriptorSetLayout), *m_device );
+	m_texturePipelineDescriptorSetLayouts = UniqueVector<vk::DescriptorSetLayout>( std::move(descriptorSetLayout), *m_device );
 
-	m_pipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, static_cast<uint32_t>(m_pipelineDescriptorSetLayouts->size()), m_pipelineDescriptorSetLayouts->data() });
+	m_texturePipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, static_cast<uint32_t>(m_texturePipelineDescriptorSetLayouts->size()), m_texturePipelineDescriptorSetLayouts->data() });
+
+	m_worldPipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
 }
 
 void Renderer::initPipelines()
 {
-	/*constexpr auto bindingLayout = create_vertex_input_layout(hana::make_tuple(
-		hana::make_pair(hana::type_c<vertex_data>, hana::bool_c<false>),
-		hana::make_pair(hana::type_c<instance_data>, hana::bool_c<true>)
-	));
-
-	auto pipeline = make_graphics_pipeline(bindingLayout, ENUM_CONSTANT(vk::PrimitiveTopology, eTriangleStrip), ENUM_CONSTANT(vk::PolygonMode, eFill));
-
-	dump_layout(bindingLayout);
-
-	pipeline.create({ "shaders/shader.vert.spv", "shaders/shader.frag.spv" });
-	*/
-
-	m_pipeline.addShaderStage("shaders/shader.vert.spv");
-	m_pipeline.addShaderStage("shaders/shader.frag.spv");
 
 	vk::Viewport viewport{ 0.0f, 0.0f, (float)m_swapchainExtent.width, (float)m_swapchainExtent.height, 0.0f, 1.0f };
 	vk::Rect2D scissor{ {}, m_swapchainExtent };
 
+	// Texture (2D) Pipeline
+	{
+		m_texturePipeline.addShaderStage("shaders/texture.vert.spv");
+		m_texturePipeline.addShaderStage("shaders/texture.frag.spv");
 
-	std::vector<vk::VertexInputBindingDescription> bindings{
-		vk::VertexInputBindingDescription{ 0, sizeof(vertex_data), vk::VertexInputRate::eVertex},
-		vk::VertexInputBindingDescription{ 1, sizeof(instance_data), vk::VertexInputRate::eInstance }
-	};
-	std::vector<vk::VertexInputAttributeDescription> attributes{
-		vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, 0 },
-		vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32Sfloat, 8 },
-		vk::VertexInputAttributeDescription{ 2, 1, vk::Format::eR32G32Sfloat, 0 },
-		vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR32G32Sfloat, 8 }
-	};
+		std::vector<vk::VertexInputBindingDescription> bindings{
+			vk::VertexInputBindingDescription{ 0, sizeof(sprite_vertex), vk::VertexInputRate::eVertex},
+			vk::VertexInputBindingDescription{ 1, sizeof(sprite_instance), vk::VertexInputRate::eInstance }
+		};
+		std::vector<vk::VertexInputAttributeDescription> attributes{
+			vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32Sfloat, 0 },
+			vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32Sfloat, 8 },
+			vk::VertexInputAttributeDescription{ 2, 1, vk::Format::eR32G32Sfloat, 0 },
+			vk::VertexInputAttributeDescription{ 3, 1, vk::Format::eR32G32Sfloat, 8 }
+		};
 
-	m_pipeline.getVertexInputState()
-		.setVertexBindingDescriptionCount(bindings.size())
-		.setPVertexBindingDescriptions(bindings.data())
-		.setVertexAttributeDescriptionCount(attributes.size())
-		.setPVertexAttributeDescriptions(attributes.data());
+		m_texturePipeline.getVertexInputState()
+			.setVertexBindingDescriptionCount(static_cast<uint32_t>(bindings.size()))
+			.setPVertexBindingDescriptions(bindings.data())
+			.setVertexAttributeDescriptionCount(static_cast<uint32_t>(attributes.size()))
+			.setPVertexAttributeDescriptions(attributes.data());
+		m_texturePipeline.getInputAssemblyState()
+			.setTopology(vk::PrimitiveTopology::eTriangleStrip);
+		m_texturePipeline.getViewportState()
+			.setViewportCount(1)
+			.setPViewports(&viewport)
+			.setScissorCount(1)
+			.setPScissors(&scissor);
+		m_texturePipeline.setLayout(*m_texturePipelineLayout);
+		m_texturePipeline.setRenderPass(*m_renderPass, 0);
 
-	m_pipeline.getInputAssemblyState()
-		.setTopology(vk::PrimitiveTopology::eTriangleStrip);
+		m_texturePipeline.create();
+	}
 
-	m_pipeline.getViewportState()
-		.setViewportCount(1)
-		.setPViewports(&viewport)
-		.setScissorCount(1)
-		.setPScissors(&scissor);
+	// World (3D) Pipeline
+	{
+		m_worldPipeline.addShaderStage("shaders/world.vert.spv");
+		m_worldPipeline.addShaderStage("shaders/world.frag.spv");
 
-	m_pipeline.setLayout(*m_pipelineLayout);
 
-	m_pipeline.setRenderPass(*m_renderPass, 0);
+		std::vector<vk::VertexInputBindingDescription> bindings{
+			vk::VertexInputBindingDescription{ 0, sizeof(mesh_vertex), vk::VertexInputRate::eVertex }
+		};
+		std::vector<vk::VertexInputAttributeDescription> attributes{
+			vk::VertexInputAttributeDescription{ 0, 0, vk::Format::eR32G32B32Sfloat, 0 },
+			vk::VertexInputAttributeDescription{ 1, 0, vk::Format::eR32G32B32Sfloat, 12 }
+		};
 
-	m_pipeline.create();
+		m_worldPipeline.getVertexInputState()
+			.setVertexBindingDescriptionCount( static_cast<uint32_t>(bindings.size()) )
+			.setPVertexBindingDescriptions(bindings.data())
+			.setVertexAttributeDescriptionCount( static_cast<uint32_t>(attributes.size()) )
+			.setPVertexAttributeDescriptions(attributes.data());
+		m_worldPipeline.getInputAssemblyState()
+			.setTopology(vk::PrimitiveTopology::eTriangleList);
+		m_worldPipeline.getViewportState()
+			.setViewportCount(1)
+			.setPViewports(&viewport)
+			.setScissorCount(1)
+			.setPScissors(&scissor);
+		m_worldPipeline.setLayout(*m_worldPipelineLayout);
+		m_worldPipeline.setRenderPass(*m_renderPass, 0);
+
+		m_worldPipeline.create();
+	}
+
 }
 
 void Renderer::initDescriptorSets()
@@ -536,7 +733,7 @@ void Renderer::initDescriptorSets()
 
 	m_descriptorPool = m_device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{ {}, maxSize, static_cast<uint32_t>(poolSizes.size()), poolSizes.data() });
 
-	std::vector<vk::DescriptorSetLayout> layouts( m_textureImages->size(), m_pipelineDescriptorSetLayouts[0] );
+	std::vector<vk::DescriptorSetLayout> layouts( m_textureImages->size(), m_texturePipelineDescriptorSetLayouts[0] );
 	
 	m_textureSamplerDescriptorSets = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{
 		*m_descriptorPool,
@@ -569,32 +766,11 @@ void Renderer::initDescriptorSets()
 
 }
 
-void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
+void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& objFiles)
 {
-
-	m_vertexBuffer = createBufferUnique(4 * sizeof(vertex_data), vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, VMA_MEMORY_USAGE_GPU_ONLY);
-	m_instanceBuffer = createBufferUnique(sceneSprites.size() * sizeof(instance_data), vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-	// Staging Buffer
-	auto vertexStagingBuffer = createBufferUnique(4 * sizeof(vertex_data), vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
-	{
-		void* data;
-		vk::Result result = vk::Result(vmaMapMemory(*m_allocator, vertexStagingBuffer->allocation, &data));
-		if (result != vk::Result::eSuccess)
-			vk::throwResultException(result, "vmaMapMemory");
-
-		memcpy(data, quad, sizeof(vertex_data) * 4);
-		vmaUnmapMemory(*m_allocator, vertexStagingBuffer->allocation);
-	}
-
-	auto cb = std::move(m_device->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ *m_commandPool, vk::CommandBufferLevel::ePrimary, 1 })[0]);
-
-	cb->begin(vk::CommandBufferBeginInfo{ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
-	cb->copyBuffer(vertexStagingBuffer->value, m_vertexBuffer->value, { vk::BufferCopy{ 0, 0, sizeof(vertex_data) * 4 } });
-	cb->end();
-
-	m_queue.submit({ vk::SubmitInfo{ 0, nullptr, nullptr, 1, &cb.get() } }, nullptr);
-
+	std::vector<std::pair<uint32_t,uint32_t>> _unk;
+	m_quadVertexBuffer = createVertexBufferUnique(std::vector<std::vector<sprite_vertex>>{ quad }, _unk);
+	m_instanceBuffer = createBufferUnique(sceneSprites.size() * sizeof(mesh_vertex), vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	
 	{ // Instance Buffer
 		void* data;
@@ -602,15 +778,19 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites)
 		if (result != vk::Result::eSuccess)
 			vk::throwResultException(result, "vmaMapMemory");
 
-		instance_data* instData = reinterpret_cast<instance_data*>(data);
+		sprite_instance* instData = reinterpret_cast<sprite_instance*>(data);
 		for (auto& sprite : sceneSprites)
 			*instData++ = { sprite.pos, sprite.scale };
 		
 		vmaUnmapMemory(*m_allocator, m_instanceBuffer->allocation);
 	}
 
+	std::vector<std::vector<mesh_vertex>> meshVertices;
 
-	m_queue.waitIdle();
+	std::transform(objFiles.begin(), objFiles.end(), std::back_inserter(meshVertices), [](auto path) {return std::move(MeshData::Load(path).vertices()); });
+
+	m_meshVertexBuffer = createVertexBufferUnique(meshVertices, m_meshLocations);
+
 }
 
 void Renderer::initTextures(const std::vector<std::string>& textures)
@@ -658,7 +838,7 @@ void Renderer::initTextures(const std::vector<std::string>& textures)
 
 }
 
-void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites)
+void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std::vector<Object>& objects)
 {
 
 	m_graphicsCommandBuffers = m_device->allocateCommandBuffers(vk::CommandBufferAllocateInfo{ *m_commandPool, vk::CommandBufferLevel::ePrimary, static_cast<uint32_t>(m_swapchainFramebuffers->size()) });
@@ -683,12 +863,12 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites)
 
 	}
 		
-	if (!sprites.empty())
+	if (false && !sprites.empty())
 	{
 		for (auto cb : m_graphicsCommandBuffers)
 		{
-			m_pipeline.bind(cb);
-			cb.bindVertexBuffers(0, { m_vertexBuffer->value, m_instanceBuffer->value }, { 0, 0 });
+			m_texturePipeline.bind(cb);
+			cb.bindVertexBuffers(0, { m_quadVertexBuffer->value, m_instanceBuffer->value }, { 0, 0 });
 		}
 
 		auto searchIt = sprites.begin();
@@ -701,12 +881,30 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites)
 
 			for (auto cb : m_graphicsCommandBuffers)
 			{
-				cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_pipelineLayout, 0, { m_textureSamplerDescriptorSets[id] }, {});
+				cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_texturePipelineLayout, 0, { m_textureSamplerDescriptorSets[id] }, {});
 				cb.draw(4, static_cast<uint32_t>(std::distance(searchIt, endIt)), 0, static_cast<uint32_t>(std::distance(sprites.begin(), searchIt)));
 			}
 
 			searchIt = endIt;
 		}
+	}
+
+	if (!objects.empty())
+	{
+		for (auto cb : m_graphicsCommandBuffers)
+		{
+			m_worldPipeline.bind(cb);
+			cb.bindVertexBuffers(0, { m_meshVertexBuffer->value }, { 0 });
+		}
+
+		for (auto& object : objects)
+		{
+			for (auto cb : m_graphicsCommandBuffers)
+			{
+				cb.draw(m_meshLocations[object.meshId].second, 1, m_meshLocations[object.meshId].first, 0);
+			}
+		}
+
 	}
 
 	for (auto cb : m_graphicsCommandBuffers)
@@ -748,161 +946,4 @@ void Renderer::renderFrame()
 			&idx
 		}
 	);
-
-	//vkRenderCtx.device.waitForFences({ renderFinishedFence.get() }, true, std::numeric_limits<uint64_t>::max());
-	//vkRenderCtx.device.resetFences({ renderFinishedFence.get() });
-}
-
-
-VmaAlloc<vk::Buffer> Renderer::createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage)
-{
-	VmaAlloc<vk::Buffer> alloc;
-
-	vk::BufferCreateInfo createInfo{
-		{}, size, usage, vk::SharingMode::eExclusive // For now we only have 1 queue.
-	};
-
-	VmaAllocationCreateInfo allocInfo = {};
-	allocInfo.usage = memUsage;
-
-	vmaCreateBuffer(*m_allocator, reinterpret_cast<VkBufferCreateInfo*>(&createInfo), &allocInfo, reinterpret_cast<VkBuffer*>(&alloc.value), &alloc.allocation, nullptr);
-
-	return alloc;
-}
-
-UniqueVmaAlloc<vk::Buffer> Renderer::createBufferUnique(vk::DeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memUsage)
-{
-	return UniqueVmaAlloc<vk::Buffer>( createBuffer(size, usage, memUsage), *m_allocator );
-}
-
-void transitionImageLayout(vk::CommandBuffer cb, vk::Image image, vk::Format imageFormat, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
-{
-	vk::PipelineStageFlags srcStage, dstStage;
-	vk::AccessFlags srcAccess, dstAccess;
-	if (oldLayout == vk::ImageLayout::eUndefined)
-	{
-		srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
-	}
-	else if(oldLayout == vk::ImageLayout::eTransferDstOptimal)
-	{
-		srcStage = vk::PipelineStageFlagBits::eTransfer;
-		srcAccess = vk::AccessFlagBits::eTransferWrite;
-	}
-
-	if (newLayout == vk::ImageLayout::eTransferDstOptimal)
-	{
-		dstStage = vk::PipelineStageFlagBits::eTransfer;
-		dstAccess = vk::AccessFlagBits::eTransferWrite;
-	}
-	else if (newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
-	{
-		dstStage = vk::PipelineStageFlagBits::eFragmentShader;
-		dstAccess = vk::AccessFlagBits::eShaderRead;
-	}
-
-
-	cb.pipelineBarrier(
-		srcStage,
-		dstStage,
-		{},
-		{},
-		{},
-		{
-			vk::ImageMemoryBarrier{
-			srcAccess,
-			dstAccess,
-			oldLayout,
-			newLayout,
-			VK_QUEUE_FAMILY_IGNORED,
-			VK_QUEUE_FAMILY_IGNORED,
-			image,
-			vk::ImageSubresourceRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
-		}
-		}
-	);
-}
-
-VmaAlloc<vk::Image> Renderer::createImage(const std::string& path)
-{
-	UniqueVmaAlloc<vk::Buffer> stagingBuffer;
-	vk::DeviceSize imageSize;
-	uint32_t width, height;
-
-	{
-		int channels;
-		using unique_image = std::unique_ptr<stbi_uc, void(*)(void*)>;
-		unique_image pixels = unique_image{ stbi_load(path.c_str(), reinterpret_cast<int*>(&width), reinterpret_cast<int*>(&height), &channels, STBI_rgb_alpha), stbi_image_free };
-
-		if(!pixels) throw std::runtime_error("Image file not found. Path = " + path);
-		
-		imageSize = width * height * sizeof(uint32_t);
-
-		stagingBuffer = createBufferUnique(imageSize, vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
-		{
-			void* data;
-			vk::Result result{ vmaMapMemory(*m_allocator, stagingBuffer->allocation, &data) };
-			if (result != vk::Result::eSuccess)
-				vk::throwResultException(result, "vmaMapMemory");
-
-			memcpy(data, pixels.get(), imageSize);
-
-			vmaUnmapMemory(*m_allocator, stagingBuffer->allocation);
-		}
-	}
-
-	VmaAlloc<vk::Image> image;
-	{
-		vk::ImageCreateInfo createInfo{
-			{},
-			vk::ImageType::e2D,
-			vk::Format::eR8G8B8A8Unorm,
-			{width, height, 1},
-			1, 1,
-			vk::SampleCountFlagBits::e1,
-			vk::ImageTiling::eOptimal,
-			vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-			vk::SharingMode::eExclusive, 0, nullptr,
-			vk::ImageLayout::eUndefined
-		};
-
-		VmaAllocationCreateInfo allocInfo = {};
-		allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-		vk::Result result{ vmaCreateImage(*m_allocator, reinterpret_cast<VkImageCreateInfo*>(&createInfo), &allocInfo, reinterpret_cast<VkImage*>(&image.value), &image.allocation, nullptr) };
-
-		if (result != vk::Result::eSuccess)
-			vk::throwResultException(result, "vmaCreateImage");
-	}
-
-	auto cb = std::move(m_device->allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ *m_commandPool, vk::CommandBufferLevel::ePrimary, 1 })[0]);
-
-	cb->begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-	transitionImageLayout(*cb, image.value, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-
-	cb->copyBufferToImage(
-		stagingBuffer->value,
-		image.value,
-		vk::ImageLayout::eTransferDstOptimal,
-		{ 
-			vk::BufferImageCopy{0, 0, 0, vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {}, {width, height, 1} }
-		}
-	);
-
-	transitionImageLayout(*cb, image.value, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
-
-	cb->end();
-
-	m_queue.submit({
-		vk::SubmitInfo{0, nullptr, nullptr, 1, &cb.get() }
-	}, nullptr);
-
-	m_queue.waitIdle();
-
-	return image;
-}
-
-UniqueVmaAlloc<vk::Image> Renderer::createImageUnique(const std::string & path)
-{
-	return UniqueVmaAlloc<vk::Image>(createImage(path), *m_allocator );
 }

@@ -26,5 +26,6 @@
 #include <vk_mem_alloc.h>
 #include <termcolor.hpp>
 #include <stb_image.h>
+#include <tiny_obj_loader.h>
 
 #endif

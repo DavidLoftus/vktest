@@ -1,13 +1,13 @@
 #include "stdafx.h"
-#include "pipeline.hpp"
-#include "renderer.hpp"
-#include "shader.hpp"
+#include "pipeline.h"
+#include "renderer.h"
+#include "shader.h"
 
 void Pipeline::create(bool keepCreateInfo)
 {
 	if (!m_createInfo) throw std::runtime_error("Pipeline info was never initialized before create() call.");
 
-	m_createInfo->m_pipelineCreateInfo.stageCount = m_createInfo->m_shaderStages.size();
+	m_createInfo->m_pipelineCreateInfo.stageCount = static_cast<uint32_t>(m_createInfo->m_shaderStages.size());
 	m_createInfo->m_pipelineCreateInfo.pStages = m_createInfo->m_shaderStages.data();
 
 	m_pipeline = vkRenderCtx.device.createGraphicsPipelineUnique(nullptr, m_createInfo->m_pipelineCreateInfo);

@@ -1,8 +1,8 @@
 #include "stdafx.h"
-#include "shader.hpp"
+#include "shader.h"
 #include <fstream>
 #include <sstream>
-#include "renderer.hpp"
+#include "renderer.h"
 
 
 std::unordered_map<std::string, Shader> shaders;
