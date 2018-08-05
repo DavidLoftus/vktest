@@ -254,10 +254,11 @@ class Renderer
 public:
 
 	void init();
-
 	void loadScene(const Scene& scene);
-
 	void loop();
+
+
+	void mouseMoved(float x, float y);
 
 #pragma region Utils
 
@@ -267,56 +268,7 @@ public:
 	static void copyBuffer(VmaAlloc<vk::Buffer> src, VmaAlloc<vk::Buffer> dst);
 
 	template<typename Vertex>
-	static VmaAlloc<vk::Buffer> createVertexBuffer( const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output )
-	{
-		size_t totalVertices = std::accumulate(
-			meshes.begin(),
-			meshes.end(),
-			0ull,
-			[](size_t n, const std::vector<Vertex>& data) {return n + data.size(); }
-		);
-
-		if (totalVertices == 0)
-		{
-			return Renderer::createBuffer(
-				1,
-				vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-				VMA_MEMORY_USAGE_GPU_ONLY
-			);
-		}
-
-		VmaAlloc<vk::Buffer> buffer = Renderer::createBuffer(
-			totalVertices * sizeof(Vertex),
-			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-			VMA_MEMORY_USAGE_GPU_ONLY
-		);
-
-		UniqueVmaAlloc<vk::Buffer> stagingBuffer = Renderer::createBufferUnique(
-			totalVertices * sizeof(Vertex),
-			vk::BufferUsageFlagBits::eTransferSrc,
-			VMA_MEMORY_USAGE_CPU_ONLY
-		);
-
-		Vertex* data;
-		vmaMapMemory(vkRenderCtx.allocator, stagingBuffer->allocation, reinterpret_cast<void**>(&data));
-
-		uint32_t firstVertex = 0;
-		for (auto& vertices : meshes)
-		{
-			uint32_t nVertices = static_cast<uint32_t>(vertices.size());
-			memcpy(data + firstVertex, vertices.data(), nVertices * sizeof(Vertex));
-
-			output.emplace_back(firstVertex, nVertices);
-
-			firstVertex += nVertices;
-		}
-
-		vmaUnmapMemory(vkRenderCtx.allocator, stagingBuffer->allocation);
-
-		Renderer::copyBuffer(*stagingBuffer, buffer);
-
-		return buffer;
-	}
+	static VmaAlloc<vk::Buffer> createVertexBuffer(const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output);
 
 	template<typename Vertex>
 	static UniqueVmaAlloc<vk::Buffer> createVertexBufferUnique(const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output)
@@ -359,18 +311,18 @@ private:
 
 #pragma region SceneLoad
 
-	void initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& meshes);
+	void initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& objFiles, const std::vector<Object>& objects);
 	void initTextures(const std::vector<std::string>& textures);
 	void initPipelineLayout();
 	void initPipelines();
-	void initDescriptorSets();
+	void initDescriptorSets(size_t nObjects);
 	void initCommandBuffers(const std::vector<Sprite>& sprites, const std::vector<Object>& objects);
 
 #pragma endregion
 
 #pragma region RenderLoop
 
-	void updateBuffers();
+	void updateBuffers(float deltaT);
 	void renderFrame();
 
 #pragma endregion
@@ -414,7 +366,7 @@ private:
 	vk::UniquePipelineLayout m_texturePipelineLayout;
 	Pipeline m_texturePipeline{ GraphicsPipelineDefaults() };
 
-	//UniqueVector<vk::DescriptorSetLayout> m_worldPipelineDescriptorSetLayouts;
+	UniqueVector<vk::DescriptorSetLayout> m_worldPipelineDescriptorSetLayouts;
 	vk::UniquePipelineLayout m_worldPipelineLayout;
 	Pipeline m_worldPipeline{ GraphicsPipelineDefaults() };
 
@@ -432,12 +384,70 @@ private:
 	UniqueVmaAlloc<vk::Buffer> m_meshVertexBuffer;
 	std::vector<std::pair<uint32_t,uint32_t>> m_meshLocations;
 
-
+	UniqueVmaAlloc<vk::Buffer> m_meshDataBuffer;
+	std::vector<vk::DescriptorSet> m_meshDataDescriptorSets;
+	vk::DescriptorSet m_renderDataDescriptorSet;
 
 	std::vector<vk::DescriptorSet> m_textureSamplerDescriptorSets;
+
+	glm::vec2 m_mousePos;
+
+	glm::vec3 m_camPos{ 0.0f, 0.0f, 1.0f }, m_camDir{0.0f, 0.0f, -1.0f};
 
 	size_t m_currentFrame = 0;
 
 };
+
+template<typename Vertex>
+static VmaAlloc<vk::Buffer> Renderer::createVertexBuffer(const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output)
+{
+	size_t totalVertices = std::accumulate(
+		meshes.begin(),
+		meshes.end(),
+		0ull,
+		[](size_t n, const std::vector<Vertex>& data) {return n + data.size(); }
+	);
+
+	if (totalVertices == 0)
+	{
+		return Renderer::createBuffer(
+			1,
+			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+			VMA_MEMORY_USAGE_GPU_ONLY
+		);
+	}
+
+	VmaAlloc<vk::Buffer> buffer = Renderer::createBuffer(
+		totalVertices * sizeof(Vertex),
+		vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+		VMA_MEMORY_USAGE_GPU_ONLY
+	);
+
+	UniqueVmaAlloc<vk::Buffer> stagingBuffer = Renderer::createBufferUnique(
+		totalVertices * sizeof(Vertex),
+		vk::BufferUsageFlagBits::eTransferSrc,
+		VMA_MEMORY_USAGE_CPU_ONLY
+	);
+
+	Vertex* data;
+	vmaMapMemory(vkRenderCtx.allocator, stagingBuffer->allocation, reinterpret_cast<void**>(&data));
+
+	uint32_t firstVertex = 0;
+	for (auto& vertices : meshes)
+	{
+		uint32_t nVertices = static_cast<uint32_t>(vertices.size());
+		memcpy(data + firstVertex, vertices.data(), nVertices * sizeof(Vertex));
+
+		output.emplace_back(firstVertex, nVertices);
+
+		firstVertex += nVertices;
+	}
+
+	vmaUnmapMemory(vkRenderCtx.allocator, stagingBuffer->allocation);
+
+	Renderer::copyBuffer(*stagingBuffer, buffer);
+
+	return buffer;
+}
 
 #endif

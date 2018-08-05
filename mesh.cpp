@@ -24,14 +24,14 @@ MeshData MeshData::Load(std::string path)
 		vertices.push_back(
 			mesh_vertex{
 				glm::vec3(
-					attrib.vertices[shape.vertex_index * 3 + 0],
+					attrib.vertices[shape.vertex_index * 3 + 2],
 					attrib.vertices[shape.vertex_index * 3 + 1],
-					attrib.vertices[shape.vertex_index * 3 + 2]
+					attrib.vertices[shape.vertex_index * 3 + 0]
 				),
 				glm::vec3(
-					attrib.colors[shape.vertex_index * 3 + 0],
+					attrib.colors[shape.vertex_index * 3 + 2],
 					attrib.colors[shape.vertex_index * 3 + 1],
-					attrib.colors[shape.vertex_index * 3 + 2]
+					attrib.colors[shape.vertex_index * 3 + 0]
 				)
 			}
 		);

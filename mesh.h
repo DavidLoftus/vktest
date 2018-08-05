@@ -21,7 +21,11 @@ public:
 	{
 		return m_path;
 	}
-	const std::vector<mesh_vertex> vertices()
+	const std::vector<mesh_vertex> vertices() const
+	{
+		return m_vertices;
+	}
+	std::vector<mesh_vertex> vertices()
 	{
 		return m_vertices;
 	}

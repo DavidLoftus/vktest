@@ -63,19 +63,28 @@ void Renderer::loadScene(const Scene& scene)
 	initPipelineLayout();
 	initPipelines();
 
-	initBuffers(sorted_sprites, scene.objFiles());
+	initBuffers(sorted_sprites, scene.objFiles(), scene.objects());
 	initTextures(scene.textures());
 
-	initDescriptorSets();
+	initDescriptorSets(scene.objects().size());
 	initCommandBuffers(sorted_sprites, scene.objects());
 
 }
 
 void Renderer::loop()
 {
+	std::chrono::high_resolution_clock clock;
+
+	auto time = clock.now();
+
 	while (!glfwWindowShouldClose(m_window.get()))
 	{
-		updateBuffers();
+
+		auto oldTime = std::exchange(time, clock.now());
+
+		std::chrono::duration<float> tDiff = time - oldTime;
+
+		updateBuffers(tDiff.count());
 		renderFrame();
 
 		glfwPollEvents();
@@ -87,6 +96,24 @@ void Renderer::loop()
 
 	Shader::FreeShaders();
 	
+}
+
+
+const float sensitivity = 0.02f;
+const glm::vec3 VECTOR_UP{0.0f, 1.0f, 0.0f};
+
+void Renderer::mouseMoved(float x, float y)
+{
+
+	glm::vec2 newPos(x, y);
+	glm::vec2 mouseMove = newPos - m_mousePos;
+	m_mousePos = newPos;
+
+	//std::cout << glm::to_string(mouseMove) << std::endl;
+
+	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.y, glm::cross(m_camDir, VECTOR_UP));
+	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.x, VECTOR_UP);
+
 }
 
 
@@ -274,6 +301,10 @@ UniqueVmaAlloc<vk::Image> Renderer::createImageUnique(const std::string & path)
 	return UniqueVmaAlloc<vk::Image>(createImage(path), vkRenderCtx.allocator);
 }
 
+static void mouse_move_cb(GLFWwindow* window, double xpos, double ypos)
+{
+	reinterpret_cast<Renderer*>(glfwGetWindowUserPointer(window))->mouseMoved(xpos, ypos);
+}
 
 void Renderer::initWindow()
 {
@@ -285,6 +316,12 @@ void Renderer::initWindow()
 	GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Test", nullptr, nullptr);
 
 	m_window.reset(window);
+
+	glfwSetWindowUserPointer(m_window.get(), this);
+
+	glfwSetInputMode(m_window.get(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+	glfwSetCursorPosCallback(m_window.get(), mouse_move_cb);
+
 }
 
 void Renderer::initCoreRenderer()
@@ -622,26 +659,41 @@ void Renderer::initCommandPools()
 
 void Renderer::initPipelineLayout()
 {
+	{
+		std::vector<vk::DescriptorSetLayoutBinding> bindings{
+			vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}
+		};
 
-	std::vector<vk::DescriptorSetLayoutBinding> bindings{
-		vk::DescriptorSetLayoutBinding{0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}
-	};
+		std::vector<vk::DescriptorSetLayout> descriptorSetLayout{
+			m_device->createDescriptorSetLayout(
+				vk::DescriptorSetLayoutCreateInfo{
+					{},
+					static_cast<uint32_t>(bindings.size()),
+					bindings.data()
+				}
+			)
+		};
 
-	std::vector<vk::DescriptorSetLayout> descriptorSetLayout{
-		m_device->createDescriptorSetLayout(
-			vk::DescriptorSetLayoutCreateInfo{
-				{},
-				static_cast<uint32_t>(bindings.size()),
-				bindings.data()
-			}
-		)
-	};
+		m_texturePipelineDescriptorSetLayouts = UniqueVector<vk::DescriptorSetLayout>(std::move(descriptorSetLayout), *m_device);
 
-	m_texturePipelineDescriptorSetLayouts = UniqueVector<vk::DescriptorSetLayout>( std::move(descriptorSetLayout), *m_device );
+		m_texturePipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{ {}, static_cast<uint32_t>(m_texturePipelineDescriptorSetLayouts->size()), m_texturePipelineDescriptorSetLayouts->data() });
+	}
 
-	m_texturePipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{{}, static_cast<uint32_t>(m_texturePipelineDescriptorSetLayouts->size()), m_texturePipelineDescriptorSetLayouts->data() });
+	{
+		std::vector<vk::DescriptorSetLayoutBinding> bindings{
+			vk::DescriptorSetLayoutBinding{ 0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex },
+			vk::DescriptorSetLayoutBinding{ 0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex }
+		};
 
-	m_worldPipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
+		std::vector<vk::DescriptorSetLayout> descriptorSetLayout{
+			m_device->createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo{ {}, 1, &bindings[0] }),
+			m_device->createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo{ {}, 1, &bindings[1] }),
+		};
+
+		m_worldPipelineDescriptorSetLayouts = UniqueVector<vk::DescriptorSetLayout>(std::move(descriptorSetLayout), *m_device);
+
+		m_worldPipelineLayout = m_device->createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{ {}, static_cast<uint32_t>(m_worldPipelineDescriptorSetLayouts->size()), m_worldPipelineDescriptorSetLayouts->data() });
+	}
 }
 
 void Renderer::initPipelines()
@@ -718,39 +770,82 @@ void Renderer::initPipelines()
 
 }
 
-void Renderer::initDescriptorSets()
+struct ObjectRenderData
 {
-	std::vector<vk::DescriptorPoolSize> poolSizes{
-		vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, static_cast<uint32_t>(m_textureImages->size()) }
-	};
+	glm::mat4 world;
+};
 
-	uint32_t maxSize = std::accumulate(
-		poolSizes.begin(),
-		poolSizes.end(),
-		0u,
-		[](uint32_t sum, const vk::DescriptorPoolSize& poolSize) { return sum + poolSize.descriptorCount; }
-	);
+struct RenderData
+{
+	glm::mat4 projection;
+	glm::mat4 view;
+};
 
-	m_descriptorPool = m_device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{ {}, maxSize, static_cast<uint32_t>(poolSizes.size()), poolSizes.data() });
+size_t pad_up(size_t offset, size_t alignment)
+{
+	size_t r = offset & (alignment - 1);
+	return (r == 0) ? offset : offset - r + alignment;
+}
 
-	std::vector<vk::DescriptorSetLayout> layouts( m_textureImages->size(), m_texturePipelineDescriptorSetLayouts[0] );
-	
-	m_textureSamplerDescriptorSets = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{
-		*m_descriptorPool,
-		static_cast<uint32_t>(m_textureImages->size()),
-		layouts.data()
-	});
-	
+
+void Renderer::initDescriptorSets(size_t nObjects)
+{
+
+	// Pool
+	{
+		std::vector<vk::DescriptorPoolSize> poolSizes{
+			vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, static_cast<uint32_t>(m_textureImages->size()) },
+			vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, static_cast<uint32_t>(nObjects+1) }
+		};
+
+		uint32_t maxSize = std::accumulate(
+			poolSizes.begin(),
+			poolSizes.end(),
+			0u,
+			[](uint32_t sum, const vk::DescriptorPoolSize& poolSize) { return sum + poolSize.descriptorCount; }
+		);
+
+		m_descriptorPool = m_device->createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo{ {}, maxSize, static_cast<uint32_t>(poolSizes.size()), poolSizes.data() });
+	}
+
+
+
+	// Image Descriptors
+	{
+		std::vector<vk::DescriptorSetLayout> layouts(m_textureImages->size(), m_texturePipelineDescriptorSetLayouts[0]);
+
+		m_textureSamplerDescriptorSets = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{
+			*m_descriptorPool,
+			static_cast<uint32_t>(m_textureImages->size()),
+			layouts.data()
+		});
+	}
+
+	// Object Descriptors
+	{
+
+		m_renderDataDescriptorSet = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{ *m_descriptorPool, 1, &m_worldPipelineDescriptorSetLayouts[0] })[0];
+
+		std::vector<vk::DescriptorSetLayout> layouts(nObjects, m_worldPipelineDescriptorSetLayouts[1]);
+
+		m_meshDataDescriptorSets = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{
+			*m_descriptorPool,
+			static_cast<uint32_t>(nObjects),
+			layouts.data()
+		});
+	}
+
+	std::vector<vk::WriteDescriptorSet> writeInfos;
+	writeInfos.reserve(m_textureImages->size() + nObjects + 1);
+
+
 	std::vector<vk::DescriptorImageInfo> imageInfos;
 	imageInfos.reserve(m_textureImages->size());
 
-	for(auto imageView : *m_textureImageViews)
-		imageInfos.emplace_back( *m_textureSampler, imageView, vk::ImageLayout::eShaderReadOnlyOptimal );
-
-	std::vector<vk::WriteDescriptorSet> writeInfos;
-	writeInfos.reserve(m_textureImages->size());
-	for (size_t i = 0; i < m_textureImages->size(); ++i)
+	for (size_t i = 0; i < m_textureImageViews->size(); ++i)
 	{
+		imageInfos.emplace_back(*m_textureSampler, m_textureImageViews[i], vk::ImageLayout::eShaderReadOnlyOptimal);
+
 		writeInfos.push_back(
 			vk::WriteDescriptorSet{
 				m_textureSamplerDescriptorSets[i],
@@ -762,11 +857,42 @@ void Renderer::initDescriptorSets()
 		);
 	}
 
+	size_t RenderData_size = pad_up(sizeof(RenderData),vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+	size_t ObjectRenderData_size = pad_up(sizeof(ObjectRenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+
+	std::vector<vk::DescriptorBufferInfo> bufferInfos{ vk::DescriptorBufferInfo{ m_meshDataBuffer->value, 0, sizeof(RenderData) } };
+
+	bufferInfos.reserve(1 + nObjects);
+
+	writeInfos.push_back(
+		vk::WriteDescriptorSet{
+			m_renderDataDescriptorSet,
+			0,
+			0,
+			1,
+			vk::DescriptorType::eUniformBuffer,
+		}.setPBufferInfo(&bufferInfos.back())
+	);
+
+	for (size_t i = 0; i < nObjects; ++i)
+	{
+		bufferInfos.emplace_back(m_meshDataBuffer->value, RenderData_size + i * ObjectRenderData_size, sizeof(ObjectRenderData));
+		writeInfos.push_back(
+			vk::WriteDescriptorSet{
+				m_meshDataDescriptorSets[i],
+				0,
+				0,
+				1,
+				vk::DescriptorType::eUniformBuffer,
+			}.setPBufferInfo(&bufferInfos.back())
+		);
+	}
+
 	m_device->updateDescriptorSets( writeInfos, {} );
 
 }
 
-void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& objFiles)
+void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& objFiles, const std::vector<Object>& objects)
 {
 	std::vector<std::pair<uint32_t,uint32_t>> _unk;
 	m_quadVertexBuffer = createVertexBufferUnique(std::vector<std::vector<sprite_vertex>>{ quad }, _unk);
@@ -790,6 +916,29 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::v
 	std::transform(objFiles.begin(), objFiles.end(), std::back_inserter(meshVertices), [](auto path) {return std::move(MeshData::Load(path).vertices()); });
 
 	m_meshVertexBuffer = createVertexBufferUnique(meshVertices, m_meshLocations);
+
+	size_t RenderData_size = pad_up(sizeof(RenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+	size_t ObjectRenderData_size = pad_up(sizeof(ObjectRenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+
+	m_meshDataBuffer = createBufferUnique(RenderData_size + objects.size() * sizeof(ObjectRenderData), vk::BufferUsageFlagBits::eUniformBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+	{ // Mesh Data Buffer
+		intptr_t data;
+		vk::Result result = vk::Result(vmaMapMemory(*m_allocator, m_meshDataBuffer->allocation, reinterpret_cast<void**>(&data)));
+		if (result != vk::Result::eSuccess)
+			vk::throwResultException(result, "vmaMapMemory");
+
+		RenderData* instData = reinterpret_cast<RenderData*>(data);
+		instData->projection = glm::infinitePerspective(glm::radians(100.0f), static_cast<float>(m_swapchainExtent.height)/m_swapchainExtent.width, 0.1f);
+		instData->view = glm::lookAt(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		instData->projection[1][1] *= -1;
+
+		for (size_t i = 0; i < objects.size(); ++i)
+			reinterpret_cast<ObjectRenderData*>(data + RenderData_size + ObjectRenderData_size * i)->world = glm::translate(glm::mat4(), objects[i].pos);
+
+		vmaUnmapMemory(*m_allocator, m_meshDataBuffer->allocation);
+	}
+
 
 }
 
@@ -863,7 +1012,7 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 
 	}
 		
-	if (false && !sprites.empty())
+	if (!sprites.empty())
 	{
 		for (auto cb : m_graphicsCommandBuffers)
 		{
@@ -895,13 +1044,15 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 		{
 			m_worldPipeline.bind(cb);
 			cb.bindVertexBuffers(0, { m_meshVertexBuffer->value }, { 0 });
+			cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_worldPipelineLayout, 0, { m_renderDataDescriptorSet }, {});
 		}
 
-		for (auto& object : objects)
+		for (size_t i = 0; i < objects.size(); ++i)
 		{
 			for (auto cb : m_graphicsCommandBuffers)
 			{
-				cb.draw(m_meshLocations[object.meshId].second, 1, m_meshLocations[object.meshId].first, 0);
+				cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_worldPipelineLayout, 1, { m_meshDataDescriptorSets[i] }, {});
+				cb.draw(m_meshLocations[objects[i].meshId].second, 1, m_meshLocations[objects[i].meshId].first, 0);
 			}
 		}
 
@@ -915,8 +1066,46 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 
 }
 
-void Renderer::updateBuffers()
+
+const float speed = 50.0f;
+
+void Renderer::updateBuffers(float deltaT)
 {
+	glm::vec3 moveDir{ 0.0f };
+	if (glfwGetKey(m_window.get(), GLFW_KEY_W) == GLFW_PRESS)
+	{
+		moveDir += m_camDir;
+	}
+	if (glfwGetKey(m_window.get(), GLFW_KEY_S) == GLFW_PRESS)
+	{
+		moveDir -= m_camDir;
+	}
+	if (glfwGetKey(m_window.get(), GLFW_KEY_A) == GLFW_PRESS)
+	{
+		moveDir += glm::cross(VECTOR_UP, m_camDir);
+	}
+	if (glfwGetKey(m_window.get(), GLFW_KEY_D) == GLFW_PRESS)
+	{
+		moveDir -= glm::cross(VECTOR_UP, m_camDir);
+	}
+
+	if (moveDir != glm::zero<glm::vec3>())
+	{
+		m_camPos += glm::normalize(moveDir) * speed * deltaT;
+	}
+
+	if (glfwGetKey(m_window.get(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
+	{
+		glfwSetWindowShouldClose(m_window.get(), GLFW_TRUE);
+	}
+	
+
+	RenderData* data;
+	vmaMapMemory(*m_allocator, m_meshDataBuffer->allocation, reinterpret_cast<void**>(&data));
+
+	data->view = glm::lookAt(m_camPos, m_camPos+m_camDir, VECTOR_UP);
+
+	vmaUnmapMemory(*m_allocator, m_meshDataBuffer->allocation);
 }
 
 void Renderer::renderFrame()

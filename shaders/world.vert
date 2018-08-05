@@ -6,12 +6,23 @@ out gl_PerVertex {
 	float gl_PointSize;
 };
 
+layout(set = 0, binding = 0) uniform RenderData
+{
+	mat4 projection;
+	mat4 view;
+} render;
+
+layout(set = 1, binding = 0) uniform ObjectRenderData
+{
+	mat4 model;
+} object;
+
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec3 color;
 
 layout(location = 0) out vec3 col;
 
 void main() {
-    gl_Position = vec4(pos,1);
+    gl_Position = render.projection * render.view * object.model * vec4(pos,1);
     col = color;
 }
