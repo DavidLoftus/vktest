@@ -19,8 +19,6 @@
 #include <numeric>
 #include <chrono>
 
-#include <boost/hana.hpp>
-
 #include <vulkan/vulkan.hpp>
 
 #define GLM_FORCE_LEFT_HANDED 

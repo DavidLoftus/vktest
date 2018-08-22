@@ -12,11 +12,23 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS YES)
 
 list(APPEND SOURCE_FILES main.cpp)
 
+list(APPEND SOURCE_FILES globals.cpp)
+list(APPEND HEADER_FILES globals.h)
+
+list(APPEND SOURCE_FILES window.cpp)
+list(APPEND HEADER_FILES window.h)
+
 list(APPEND SOURCE_FILES renderer.cpp)
 list(APPEND HEADER_FILES renderer.h)
 
 list(APPEND SOURCE_FILES scene.cpp)
 list(APPEND HEADER_FILES scene.h)
+
+list(APPEND SOURCE_FILES camera.cpp)
+list(APPEND HEADER_FILES camera.h)
+
+list(APPEND SOURCE_FILES buffer.cpp)
+list(APPEND HEADER_FILES buffer.h)
 
 list(APPEND SOURCE_FILES shader.cpp)
 list(APPEND HEADER_FILES shader.h)

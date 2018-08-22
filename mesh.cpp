@@ -15,27 +15,31 @@ MeshData MeshData::Load(std::string path)
 	tinyobj::LoadObj(&attrib, &shapes, &materials, &err, path.c_str());
 
 	std::vector<mesh_vertex> vertices;
+	std::vector<uint16_t> indices;
 
 	auto& shape = shapes.front();
 
-	vertices.reserve(shape.mesh.indices.size());
-	for (auto& shape : shape.mesh.indices)
+	vertices.reserve(attrib.vertices.size() / 3);
+	for (auto it = attrib.vertices.begin(); it != attrib.vertices.end(); std::advance(it, 3))
 	{
 		vertices.push_back(
 			mesh_vertex{
-				glm::vec3(
-					attrib.vertices[shape.vertex_index * 3 + 2],
-					attrib.vertices[shape.vertex_index * 3 + 1],
-					attrib.vertices[shape.vertex_index * 3 + 0]
-				),
-				glm::vec3(
-					attrib.colors[shape.vertex_index * 3 + 2],
-					attrib.colors[shape.vertex_index * 3 + 1],
-					attrib.colors[shape.vertex_index * 3 + 0]
-				)
+				glm::vec3{
+					*it,
+					*std::next(it),
+					*std::next(it,2)
+				},
+				glm::vec3{0.0f,1.0f,0.0f}
 			}
 		);
 	}
 
-	return {std::move(path), std::move(vertices)};
+
+	indices.reserve(shape.mesh.indices.size());
+	for (auto& shape : shape.mesh.indices)
+	{
+		indices.push_back(shape.vertex_index);
+	}
+
+	return {std::move(path), std::move(vertices), std::move(indices)};
 }

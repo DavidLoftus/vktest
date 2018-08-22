@@ -1,3 +1,3 @@
 1 1
 0 0 1 1 ../texture.jpg
-0 0 0 ../poly-wolf.obj
+0 0 0 ../teapot.obj

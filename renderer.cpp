@@ -19,8 +19,6 @@ void vkDestroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackE
 	pfn_vkDestroyDebugReportCallbackEXT(instance, callback, pAllocator);
 }
 
-vkRenderCtx_t vkRenderCtx;
-
 
 const vk::PipelineVertexInputStateCreateInfo GraphicsPipelineDefaults::vertexInputState;
 const vk::PipelineInputAssemblyStateCreateInfo GraphicsPipelineDefaults::inputAssemblyState{ {}, vk::PrimitiveTopology::eTriangleList };
@@ -73,6 +71,9 @@ void Renderer::loadScene(const Scene& scene)
 
 void Renderer::loop()
 {
+	m_cameraRenderData.projection = glm::infinitePerspective(glm::radians(100.0f), static_cast<float>(m_swapchainExtent.height)/m_swapchainExtent.width, 0.1f);
+
+
 	std::chrono::high_resolution_clock clock;
 
 	auto time = clock.now();
@@ -100,7 +101,7 @@ void Renderer::loop()
 
 
 const float sensitivity = 0.02f;
-const glm::vec3 VECTOR_UP{0.0f, 1.0f, 0.0f};
+const glm::vec3 VECTOR_UP{0.0f, -1.0f, 0.0f};
 
 void Renderer::mouseMoved(float x, float y)
 {
@@ -111,7 +112,7 @@ void Renderer::mouseMoved(float x, float y)
 
 	//std::cout << glm::to_string(mouseMove) << std::endl;
 
-	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.y, glm::cross(m_camDir, VECTOR_UP));
+	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.y, glm::cross(VECTOR_UP, m_camDir));
 	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.x, VECTOR_UP);
 
 }
@@ -145,12 +146,16 @@ void Renderer::copyBuffer(VmaAlloc<vk::Buffer> src, VmaAlloc<vk::Buffer> dst)
 	vmaGetAllocationInfo(vkRenderCtx.allocator, dst.allocation, &dstAllocInfo);
 
 	size_t sz = std::min(srcAllocInfo.size, dstAllocInfo.size);
+	copyBuffer(src, dst, { vk::BufferCopy{ 0, 0, sz } });
+}
 
+void Renderer::copyBuffer(VmaAlloc<vk::Buffer> src, VmaAlloc<vk::Buffer> dst, const std::vector<vk::BufferCopy>& ranges)
+{
 	auto cb = std::move(vkRenderCtx.device.allocateCommandBuffersUnique(vk::CommandBufferAllocateInfo{ vkRenderCtx.commandPool, vk::CommandBufferLevel::ePrimary, 1 }).front());
 
-	cb->begin(vk::CommandBufferBeginInfo{});
+	cb->begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
-	cb->copyBuffer(src.value, dst.value, { vk::BufferCopy{ 0, 0, sz } });
+	cb->copyBuffer(src.value, dst.value, ranges);
 
 	cb->end();
 
@@ -416,8 +421,8 @@ void Renderer::initDebugReportCallback()
 {
 	m_debugReportCallback = m_instance->createDebugReportCallbackEXTUnique(
 		vk::DebugReportCallbackCreateInfoEXT{
-			vk::DebugReportFlagBitsEXT::eDebug
-		  | vk::DebugReportFlagBitsEXT::eError
+			//vk::DebugReportFlagBitsEXT::eDebug
+		    vk::DebugReportFlagBitsEXT::eError
 		  | vk::DebugReportFlagBitsEXT::ePerformanceWarning
 		  | vk::DebugReportFlagBitsEXT::eWarning,
 		callback_fn,
@@ -775,19 +780,6 @@ struct ObjectRenderData
 	glm::mat4 world;
 };
 
-struct RenderData
-{
-	glm::mat4 projection;
-	glm::mat4 view;
-};
-
-size_t pad_up(size_t offset, size_t alignment)
-{
-	size_t r = offset & (alignment - 1);
-	return (r == 0) ? offset : offset - r + alignment;
-}
-
-
 void Renderer::initDescriptorSets(size_t nObjects)
 {
 
@@ -857,10 +849,10 @@ void Renderer::initDescriptorSets(size_t nObjects)
 		);
 	}
 
-	size_t RenderData_size = pad_up(sizeof(RenderData),vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
-	size_t ObjectRenderData_size = pad_up(sizeof(ObjectRenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+	size_t RenderData_size = align_offset(sizeof(RenderData),vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+	size_t ObjectRenderData_size = align_offset(sizeof(ObjectRenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
 
-	std::vector<vk::DescriptorBufferInfo> bufferInfos{ vk::DescriptorBufferInfo{ m_meshDataBuffer->value, 0, sizeof(RenderData) } };
+	std::vector<vk::DescriptorBufferInfo> bufferInfos{ m_renderData.bufferInfo() };
 
 	bufferInfos.reserve(1 + nObjects);
 
@@ -876,7 +868,7 @@ void Renderer::initDescriptorSets(size_t nObjects)
 
 	for (size_t i = 0; i < nObjects; ++i)
 	{
-		bufferInfos.emplace_back(m_meshDataBuffer->value, RenderData_size + i * ObjectRenderData_size, sizeof(ObjectRenderData));
+		bufferInfos.push_back(m_objectData.bufferInfo(i));
 		writeInfos.push_back(
 			vk::WriteDescriptorSet{
 				m_meshDataDescriptorSets[i],
@@ -894,50 +886,50 @@ void Renderer::initDescriptorSets(size_t nObjects)
 
 void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& objFiles, const std::vector<Object>& objects)
 {
-	std::vector<std::pair<uint32_t,uint32_t>> _unk;
-	m_quadVertexBuffer = createVertexBufferUnique(std::vector<std::vector<sprite_vertex>>{ quad }, _unk);
-	m_instanceBuffer = createBufferUnique(sceneSprites.size() * sizeof(mesh_vertex), vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
-	
-	{ // Instance Buffer
-		void* data;
-		vk::Result result = vk::Result(vmaMapMemory(*m_allocator, m_instanceBuffer->allocation, &data));
-		if (result != vk::Result::eSuccess)
-			vk::throwResultException(result, "vmaMapMemory");
+	m_quadVertices = 4;
 
-		sprite_instance* instData = reinterpret_cast<sprite_instance*>(data);
-		for (auto& sprite : sceneSprites)
-			*instData++ = { sprite.pos, sprite.scale };
-		
-		vmaUnmapMemory(*m_allocator, m_instanceBuffer->allocation);
+	std::vector<mesh_vertex> meshVertices;
+	std::vector<uint16_t> meshIndices;
+	for (auto& path : objFiles)
+	{
+		MeshData mesh = MeshData::Load(path);
+
+		m_meshLocations.emplace_back(static_cast<uint32_t>(meshIndices.size()), static_cast<uint32_t>(mesh.indices().size()));
+		meshVertices.insert(meshVertices.end(), mesh.vertices().begin(), mesh.vertices().end());
+
+		uint16_t offset = meshIndices.size();
+		meshIndices.reserve(offset + mesh.indices().size());
+		std::transform(mesh.indices().begin(), mesh.indices().end(), std::back_inserter(meshIndices), std::bind(std::plus(),offset,std::placeholders::_1));
 	}
 
-	std::vector<std::vector<mesh_vertex>> meshVertices;
+	m_meshVertices = meshVertices.size(); // Weird syntax for initliazing buffers with size
+	m_meshIndices = meshIndices.size();
 
-	std::transform(objFiles.begin(), objFiles.end(), std::back_inserter(meshVertices), [](auto path) {return std::move(MeshData::Load(path).vertices()); });
+	m_vertexDataBuffer = buffer::createCombinedBufferUnique(
+		{ &m_quadVertices, &m_meshVertices, &m_meshIndices },
+		VMA_MEMORY_USAGE_GPU_ONLY,
+		vk::BufferUsageFlagBits::eTransferDst
+	);
+	buffer::updateBuffers(
+		*m_vertexDataBuffer,
+		{ &m_quadVertices, &m_meshVertices, &m_meshIndices },
+		{ (void*)quad.data(), meshVertices.data(), meshIndices.data()}
+	);
 
-	m_meshVertexBuffer = createVertexBufferUnique(meshVertices, m_meshLocations);
+	std::vector<sprite_instance> instData;
+	instData.reserve(sceneSprites.size());
+	std::transform(sceneSprites.begin(), sceneSprites.end(), std::back_inserter(instData), [](const Sprite& sprite) { return sprite_instance{ sprite.pos, sprite.scale }; });
 
-	size_t RenderData_size = pad_up(sizeof(RenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
-	size_t ObjectRenderData_size = pad_up(sizeof(ObjectRenderData), vkRenderCtx.physicalDeviceProperties.limits.minUniformBufferOffsetAlignment);
+	m_spriteData = instData.size();
 
-	m_meshDataBuffer = createBufferUnique(RenderData_size + objects.size() * sizeof(ObjectRenderData), vk::BufferUsageFlagBits::eUniformBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	m_renderData = 1;
 
-	{ // Mesh Data Buffer
-		intptr_t data;
-		vk::Result result = vk::Result(vmaMapMemory(*m_allocator, m_meshDataBuffer->allocation, reinterpret_cast<void**>(&data)));
-		if (result != vk::Result::eSuccess)
-			vk::throwResultException(result, "vmaMapMemory");
+	std::vector<ObjectRenderData> objectData;
+	std::transform(objects.begin(), objects.end(), std::back_inserter(objectData), [](const Object& object) -> ObjectRenderData { return { glm::translate(glm::mat4(), object.pos) }; });
+	m_objectData = objectData.size();
 
-		RenderData* instData = reinterpret_cast<RenderData*>(data);
-		instData->projection = glm::infinitePerspective(glm::radians(100.0f), static_cast<float>(m_swapchainExtent.height)/m_swapchainExtent.width, 0.1f);
-		instData->view = glm::lookAt(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		instData->projection[1][1] *= -1;
-
-		for (size_t i = 0; i < objects.size(); ++i)
-			reinterpret_cast<ObjectRenderData*>(data + RenderData_size + ObjectRenderData_size * i)->world = glm::translate(glm::mat4(), objects[i].pos);
-
-		vmaUnmapMemory(*m_allocator, m_meshDataBuffer->allocation);
-	}
+	m_instanceDataBuffer = buffer::createCombinedBufferUnique({ &m_spriteData, &m_renderData, &m_objectData }, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	buffer::updateBuffers(*m_instanceDataBuffer, { &m_spriteData, &m_objectData }, { (void*)instData.data(), objectData.data()});
 
 
 }
@@ -1017,7 +1009,8 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 		for (auto cb : m_graphicsCommandBuffers)
 		{
 			m_texturePipeline.bind(cb);
-			cb.bindVertexBuffers(0, { m_quadVertexBuffer->value, m_instanceBuffer->value }, { 0, 0 });
+			m_quadVertices.bind(cb, 0);
+			m_spriteData.bind(cb, 1);
 		}
 
 		auto searchIt = sprites.begin();
@@ -1043,7 +1036,8 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 		for (auto cb : m_graphicsCommandBuffers)
 		{
 			m_worldPipeline.bind(cb);
-			cb.bindVertexBuffers(0, { m_meshVertexBuffer->value }, { 0 });
+			m_meshVertices.bind(cb, 0);
+			m_meshIndices.bind(cb);
 			cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_worldPipelineLayout, 0, { m_renderDataDescriptorSet }, {});
 		}
 
@@ -1052,7 +1046,7 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 			for (auto cb : m_graphicsCommandBuffers)
 			{
 				cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_worldPipelineLayout, 1, { m_meshDataDescriptorSets[i] }, {});
-				cb.draw(m_meshLocations[objects[i].meshId].second, 1, m_meshLocations[objects[i].meshId].first, 0);
+				cb.drawIndexed(m_meshLocations[objects[i].meshId].second, 1, m_meshLocations[objects[i].meshId].first, 0, 0);
 			}
 		}
 
@@ -1098,14 +1092,10 @@ void Renderer::updateBuffers(float deltaT)
 	{
 		glfwSetWindowShouldClose(m_window.get(), GLFW_TRUE);
 	}
-	
 
-	RenderData* data;
-	vmaMapMemory(*m_allocator, m_meshDataBuffer->allocation, reinterpret_cast<void**>(&data));
+	m_cameraRenderData.view = glm::lookAt(m_camPos, m_camPos+m_camDir, VECTOR_UP);
 
-	data->view = glm::lookAt(m_camPos, m_camPos+m_camDir, VECTOR_UP);
-
-	vmaUnmapMemory(*m_allocator, m_meshDataBuffer->allocation);
+	buffer::updateBuffers(*m_instanceDataBuffer, {&m_renderData}, {&m_cameraRenderData});
 }
 
 void Renderer::renderFrame()
