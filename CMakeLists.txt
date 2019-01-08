@@ -1,9 +1,19 @@
-project(vktest)
 cmake_minimum_required(VERSION 3.10)
+
+include("CMake/HunterGate.cmake")
+
+option(HUNTER_NO_TOOLCHAIN_ID_RECALCULATION "Speeds up configure time." ON)
+
+HunterGate(
+    URL "https://github.com/ruslo/hunter/archive/v0.23.48.tar.gz"
+    SHA1 "515a12255189d9f85e88174c56ea5d1ed3031d40"
+)
+
+project(vktest)
 
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMake")
 include(cotire)
-		
+
 # Source Files
 
 set(CMAKE_CXX_STANDARD 17)
@@ -44,7 +54,6 @@ list(APPEND HEADER_FILES stdafx.h)
 add_executable(${PROJECT_NAME} stdafx.cpp ${HEADER_FILES})
 target_sources(${PROJECT_NAME} PUBLIC ${SOURCE_FILES})
 
-
 if (WIN32)
 add_definitions("-DNOMINMAX")
 endif()
@@ -54,32 +63,36 @@ add_definitions("-D_USE_MATH_DEFINES")
 
 # Libraries
 
+hunter_add_package(glfw)
+
 find_package(glfw3 3.3 REQUIRED)
-if(GLFW3_FOUND)
+#if(GLFW3_FOUND)
 	include_directories(${GLFW3_INCLUDE_PATH})
-	target_link_libraries(${PROJECT_NAME} ${GLFW3_LIBRARY})
-endif()
+	target_link_libraries(${PROJECT_NAME} glfw)
+#endif()
 
 
-find_package(boost 1.61 REQUIRED)
-if(Boost_FOUND)
-	include_directories(${Boost_INCLUDE_DIRS})
-	target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
-	add_definitions("-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS")
-endif()
+#hunter_add_package(Boost COMPONENTS hana)
+#find_package(boost REQUIRED COMPONENTS hana)
+#if(Boost_FOUND)
+#	include_directories(${Boost_INCLUDE_DIRS})
+#	target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
+#	#add_definitions("-D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS")
+#endif()
 
 find_package(Vulkan REQUIRED)
-if (VULKAN_FOUND)
+#if (VULKAN_FOUND)
 	message(STATUS "Found Vulkan, Including and Linking now")
 	include_directories(${Vulkan_INCLUDE_DIRS})
 	target_link_libraries(${PROJECT_NAME} ${Vulkan_LIBRARIES})
-endif (VULKAN_FOUND)
+#endif (VULKAN_FOUND)
 
+hunter_add_package(glm)
 find_package(glm REQUIRED)
-if (GLM_FOUND)
+#if (GLM_FOUND)
 	message(STATUS "Found GLM, Including ${GLM_INCLUDE_DIRS}")
 	include_directories(${GLM_INCLUDE_DIRS})
-endif ()
+#endif ()
 
 include_directories(libraries/meta/include)
 include_directories(libraries/include/)
@@ -126,4 +139,4 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders"
         )
 
-cotire(vktest)
+#cotire(vktest)

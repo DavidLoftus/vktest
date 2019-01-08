@@ -65,14 +65,16 @@ struct VmaAlloc
 };
 
 template<typename T>
-using UniqueVmaAlloc = vk::UniqueHandle<VmaAlloc<T>>;
+using UniqueVmaAlloc = vk::UniqueHandle<VmaAlloc<T>,vk::DispatchLoaderStatic>;
+using UniqueVmaAllocator = vk::UniqueHandle<VmaAllocator,vk::DispatchLoaderStatic>;
 
-template<typename T>
+
+template<typename T, typename Dispatch = vk::DispatchLoaderStatic>
 class UniqueVector :
-	public vk::UniqueHandleTraits<T>::deleter
+	public vk::UniqueHandleTraits<T,Dispatch>::deleter
 {
 	using Vector = std::vector<T>;
-	using Deleter = typename vk::UniqueHandleTraits<T>::deleter;
+	using Deleter = typename vk::UniqueHandleTraits<T,Dispatch>::deleter;
 
 	using size_type = typename Vector::size_type;
 
@@ -94,7 +96,7 @@ public:
 
 	~UniqueVector()
 	{
-		std::for_each(m_value.begin(), m_value.end(), [this](auto x) { destroy(x); });
+		std::for_each(m_value.begin(), m_value.end(), [this](auto x) { Deleter::destroy(x); });
 	}
 
 	UniqueVector& operator=(const UniqueVector&) = delete;
@@ -153,7 +155,7 @@ public:
 
 	void reset(Vector value = Vector())
 	{
-		std::for_each(m_value.begin(), m_value.end(), [this](auto x) { destroy(x); });
+		std::for_each(m_value.begin(), m_value.end(), [this](auto x) { Deleter::destroy(x); });
 		m_value = std::move(value);
 	}
 
@@ -218,14 +220,14 @@ namespace vk
 	};
 
 
-	template<>
-	struct UniqueHandleTraits<VmaAllocator>
+	template<typename Dispatch>
+	struct UniqueHandleTraits<VmaAllocator,Dispatch>
 	{
 		using deleter = VmaDestroy<NoParent>;
 	};
 
-	template<typename T>
-	struct UniqueHandleTraits<VmaAlloc<T>>
+	template<typename T,typename Dispatch>
+	struct UniqueHandleTraits<VmaAlloc<T>,Dispatch>
 	{
 		using deleter = VmaDestroy<VmaAllocator>;
 	};

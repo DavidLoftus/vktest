@@ -4,7 +4,7 @@
 #ifndef SCENE_H
 #define SCENE_H
 #include <vulkan/vulkan.hpp>
-#include <boost/hana/adapt_struct.hpp>
+//#include <boost/hana/adapt_struct.hpp>
 
 #include "mesh.h"
 

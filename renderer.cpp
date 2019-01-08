@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <stb_image.h>
 #include <numeric>
+#include <iterator>
+#include <functional>
 #include "shader.h"
-
-namespace hana = boost::hana;
 
 VkResult vkCreateDebugReportCallbackEXT(VkInstance instance, const VkDebugReportCallbackCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugReportCallbackEXT* pCallback)
 {
@@ -373,7 +373,7 @@ const std::vector<const char*> layers{
 void Renderer::initInstance()
 {
 
-	_putenv("DISABLE_VK_LAYER_VALVE_steam_overlay_1=1"); // Steam Overlay causes swapchain to break, placing this outside the program might be more ideal.
+	//_putenv("DISABLE_VK_LAYER_VALVE_steam_overlay_1=1"); // Steam Overlay causes swapchain to break, placing this outside the program might be more ideal.
 
 	uint32_t count;
 	const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&count);
@@ -403,8 +403,8 @@ void Renderer::initSurface()
 	vk::SurfaceKHR surface;
 	auto result = static_cast<vk::Result>(glfwCreateWindowSurface(*m_instance, m_window.get(), nullptr, reinterpret_cast<VkSurfaceKHR*>(&surface)));
 
-	vk::ObjectDestroy<vk::Instance> deleter(*m_instance);
-	m_surface = vk::createResultValue(result, surface, "glfwCreateWindowSurface", deleter);
+	vk::ObjectDestroy<vk::Instance,vk::DispatchLoaderStatic> deleter(*m_instance);
+	m_surface = vk::createResultValue<vk::SurfaceKHR,vk::DispatchLoaderStatic>(result, surface, "glfwCreateWindowSurface", deleter);
 }
 
 VkBool32 callback_fn(
@@ -899,7 +899,7 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::v
 
 		uint16_t offset = meshIndices.size();
 		meshIndices.reserve(offset + mesh.indices().size());
-		std::transform(mesh.indices().begin(), mesh.indices().end(), std::back_inserter(meshIndices), std::bind(std::plus(),offset,std::placeholders::_1));
+		std::transform(mesh.indices().begin(), mesh.indices().end(), std::back_inserter(meshIndices), std::bind(std::plus<uint32_t>(),offset,std::placeholders::_1));
 	}
 
 	m_meshVertices = meshVertices.size(); // Weird syntax for initliazing buffers with size

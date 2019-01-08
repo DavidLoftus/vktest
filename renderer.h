@@ -4,6 +4,7 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
+#include <GLFW/glfw3.h>
 #include <vulkan/vulkan.hpp>
 #include <vk_mem_alloc.h>
 #include "globals.h"
@@ -144,7 +145,7 @@ private:
 
 	vk::UniqueCommandPool m_commandPool;
 
-	vk::UniqueHandle<VmaAllocator> m_allocator;
+	UniqueVmaAllocator m_allocator;
 
 	UniqueVector<vk::Semaphore> m_imageAvailableSemaphores;
 	UniqueVector<vk::Semaphore> m_renderFinishedSemaphores;
@@ -197,7 +198,7 @@ private:
 };
 
 template<typename Vertex>
-static VmaAlloc<vk::Buffer> Renderer::createVertexBuffer(const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output)
+VmaAlloc<vk::Buffer> Renderer::createVertexBuffer(const std::vector<std::vector<Vertex>>& meshes, std::vector<std::pair<uint32_t, uint32_t>>& output)
 {
 	size_t totalVertices = std::accumulate(
 		meshes.begin(),

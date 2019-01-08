@@ -6,8 +6,6 @@
 #include <fstream>
 #include <algorithm>
 
-#include <boost/hana/define_struct.hpp>
-
 #include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
 #include <GLFW/glfw3.h>
