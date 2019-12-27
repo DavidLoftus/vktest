@@ -113,7 +113,7 @@ void Renderer::mouseMoved(float x, float y)
 	//std::cout << glm::to_string(mouseMove) << std::endl;
 
 	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.y, glm::cross(VECTOR_UP, m_camDir));
-	m_camDir = glm::rotate(m_camDir, -sensitivity * mouseMove.x, VECTOR_UP);
+	m_camDir = glm::rotate(m_camDir, sensitivity * mouseMove.x, VECTOR_UP);
 
 }
 
@@ -908,8 +908,8 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::v
 		std::transform(mesh.indices().begin(), mesh.indices().end(), std::back_inserter(meshIndices), std::bind(std::plus<uint32_t>(),offset,std::placeholders::_1));
 	}
 
-	m_meshVertices = meshVertices.size(); // Weird syntax for initliazing buffers with size
-	m_meshIndices = meshIndices.size();
+	m_meshVertices = vertex_buffer<mesh_vertex>{meshVertices.size()};
+	m_meshIndices = index_buffer<uint16_t>{meshIndices.size()};
 
 	m_vertexDataBuffer = buffer::createCombinedBufferUnique(
 		{ &m_quadVertices, &m_meshVertices, &m_meshIndices },
@@ -931,7 +931,7 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::v
 	m_renderData = uniform_buffer<std::pair<glm::mat4,glm::mat4>>(1);
 
 	std::vector<ObjectRenderData> objectData;
-	std::transform(objects.begin(), objects.end(), std::back_inserter(objectData), [](const Object& object) -> ObjectRenderData { return { glm::translate(glm::mat4(), object.pos) }; });
+	std::transform(objects.begin(), objects.end(), std::back_inserter(objectData), [](const Object& object) -> ObjectRenderData { return { glm::translate(glm::mat4(1), object.pos) }; });
 	m_objectData = uniform_buffer<glm::mat4>{objectData.size()};
 
 	m_instanceDataBuffer = buffer::createCombinedBufferUnique({ &m_spriteData, &m_renderData, &m_objectData }, VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -1084,11 +1084,11 @@ void Renderer::updateBuffers(float deltaT)
 	}
 	if (glfwGetKey(m_window.get(), GLFW_KEY_A) == GLFW_PRESS)
 	{
-		moveDir += glm::cross(VECTOR_UP, m_camDir);
+		moveDir -= glm::cross(VECTOR_UP, m_camDir);
 	}
 	if (glfwGetKey(m_window.get(), GLFW_KEY_D) == GLFW_PRESS)
 	{
-		moveDir -= glm::cross(VECTOR_UP, m_camDir);
+		moveDir += glm::cross(VECTOR_UP, m_camDir);
 	}
 
 	if (moveDir != glm::zero<glm::vec3>())
