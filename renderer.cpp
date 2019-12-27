@@ -816,15 +816,21 @@ void Renderer::initDescriptorSets(size_t nObjects)
 	// Object Descriptors
 	{
 
-		m_renderDataDescriptorSet = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{ *m_descriptorPool, 1, &m_worldPipelineDescriptorSetLayouts[0] })[0];
+		m_renderDataDescriptorSet = m_device->allocateDescriptorSets(
+			vk::DescriptorSetAllocateInfo{
+				*m_descriptorPool,
+				1,
+				&m_worldPipelineDescriptorSetLayouts[0]
+			}).front();
 
 		std::vector<vk::DescriptorSetLayout> layouts(nObjects, m_worldPipelineDescriptorSetLayouts[1]);
 
-		m_meshDataDescriptorSets = m_device->allocateDescriptorSets(vk::DescriptorSetAllocateInfo{
-			*m_descriptorPool,
-			static_cast<uint32_t>(nObjects),
-			layouts.data()
-		});
+		m_meshDataDescriptorSets = m_device->allocateDescriptorSets(
+			vk::DescriptorSetAllocateInfo{
+				*m_descriptorPool,
+				static_cast<uint32_t>(nObjects),
+				layouts.data()
+			});
 	}
 
 	std::vector<vk::WriteDescriptorSet> writeInfos;
