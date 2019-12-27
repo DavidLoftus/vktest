@@ -886,7 +886,7 @@ void Renderer::initDescriptorSets(size_t nObjects)
 
 void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::vector<std::string>& objFiles, const std::vector<Object>& objects)
 {
-	m_quadVertices = 4;
+	m_quadVertices = vertex_buffer<sprite_vertex>{4};
 
 	std::vector<mesh_vertex> meshVertices;
 	std::vector<uint16_t> meshIndices;
@@ -920,13 +920,13 @@ void Renderer::initBuffers(const std::vector<Sprite>& sceneSprites, const std::v
 	instData.reserve(sceneSprites.size());
 	std::transform(sceneSprites.begin(), sceneSprites.end(), std::back_inserter(instData), [](const Sprite& sprite) { return sprite_instance{ sprite.pos, sprite.scale }; });
 
-	m_spriteData = instData.size();
+	m_spriteData = vertex_buffer<sprite_instance>{instData.size()};
 
-	m_renderData = 1;
+	m_renderData = uniform_buffer<std::pair<glm::mat4,glm::mat4>>(1);
 
 	std::vector<ObjectRenderData> objectData;
 	std::transform(objects.begin(), objects.end(), std::back_inserter(objectData), [](const Object& object) -> ObjectRenderData { return { glm::translate(glm::mat4(), object.pos) }; });
-	m_objectData = objectData.size();
+	m_objectData = uniform_buffer<glm::mat4>{objectData.size()};
 
 	m_instanceDataBuffer = buffer::createCombinedBufferUnique({ &m_spriteData, &m_renderData, &m_objectData }, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	buffer::updateBuffers(*m_instanceDataBuffer, { &m_spriteData, &m_objectData }, { (void*)instData.data(), objectData.data()});
@@ -1024,7 +1024,9 @@ void Renderer::initCommandBuffers(const std::vector<Sprite>& sprites, const std:
 			for (auto cb : m_graphicsCommandBuffers)
 			{
 				cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *m_texturePipelineLayout, 0, { m_textureSamplerDescriptorSets[id] }, {});
-				cb.draw(4, static_cast<uint32_t>(std::distance(searchIt, endIt)), 0, static_cast<uint32_t>(std::distance(sprites.begin(), searchIt)));
+				auto count = static_cast<uint32_t>(std::distance(searchIt, endIt));
+				auto offset = static_cast<uint32_t>(std::distance(sprites.begin(), searchIt));
+				cb.draw(4, count, 0, offset);
 			}
 
 			searchIt = endIt;

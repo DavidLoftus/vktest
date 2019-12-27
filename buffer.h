@@ -42,7 +42,7 @@ class vertex_buffer : public buffer
 {
 public:
 	vertex_buffer() = default;
-	vertex_buffer(size_t nVertices) : buffer(nVertices * sizeof(Vertex)) {}
+	explicit vertex_buffer(size_t nVertices) : buffer(nVertices * sizeof(Vertex)) {}
 
 	virtual vk::DeviceSize alignment()
 	{
@@ -65,7 +65,7 @@ class index_buffer : public buffer
 {
 public:
 	index_buffer() = default;
-	index_buffer(size_t nIndices) : buffer(nIndices * sizeof(IndexType)) {}
+	explicit index_buffer(size_t nIndices) : buffer(nIndices * sizeof(IndexType)) {}
 
 	virtual vk::DeviceSize alignment();
 	virtual vk::BufferUsageFlags buffer_usage();
@@ -83,7 +83,7 @@ class uniform_buffer : public buffer
 
 public:
 	uniform_buffer() = default;
-	uniform_buffer(size_t nBuffers)
+	explicit uniform_buffer(size_t nBuffers)
 	{
 		m_size = nBuffers * padding_size();
 	}
